@@ -28,9 +28,11 @@ from urllib.parse import parse_qs, quote, urlparse
 from . import audio, tts, daily, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, szenarien, vergleich, worlds
 
 STATIC = Path(__file__).with_name("static")
+FAVICON = STATIC / "favicon"
 STATIC_FILES = {"/": ("index.html", "text/html; charset=utf-8"),
                 "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-                "/style.css": ("style.css", "text/css; charset=utf-8")}
+                "/style.css": ("style.css", "text/css; charset=utf-8"),
+                "/evel-icon.svg": ("evel-icon.svg", "image/svg+xml")}
 
 JOBS: list = []
 JOBS_LOCK = threading.Lock()
@@ -1065,7 +1067,11 @@ class Handler(BaseHTTPRequestHandler):
                 if origin and origin.replace("http://", "") not in self._allowed_hosts():
                     raise HTTPError(403, "Fremder Ursprung.")
             if method == "GET" and path == "/favicon.ico":
-                return self._send(204, b"", "image/x-icon")
+                path = "/favicon/favicon-32x32.ico"
+            icon = re.match(r"^/favicon/([a-z0-9-]+\.(png|ico))$", path)
+            if method == "GET" and icon and (FAVICON / icon.group(1)).is_file():
+                return self._send(200, (FAVICON / icon.group(1)).read_bytes(),
+                                  "image/png" if icon.group(2) == "png" else "image/x-icon")
             listen = re.match("^" + W + r"/episodes/(?P<eid>\d+)/audio$", path)
             if method == "GET" and listen:
                 with worlds.open_world(listen.group("slug")) as conn:
@@ -1084,13 +1090,16 @@ class Handler(BaseHTTPRequestHandler):
                 voice = q.get("stimme") or ""
                 data = tts.synth(server, (q.get("text") or "Hallo, so klinge ich.")[:300], voice, tts.language_of(server, voice))
                 return self._send(200, data, "audio/wav")
-            export = re.match("^" + W + r"/episodes/(?P<eid>\d+)/export$", path)
+            export = re.match("^" + W + r"/episodes/(?P<eid>\d+)/export(?P<pdf>\.pdf)?$", path)
             if method == "GET" and export:
                 with worlds.open_world(export.group("slug")) as conn:
-                    name, text = episodes.export_text(conn, int(export.group("eid")))
-                data = text.encode("utf-8")
+                    if export.group("pdf"):
+                        name, data = episodes.export_pdf(conn, int(export.group("eid")))
+                    else:
+                        name, text = episodes.export_text(conn, int(export.group("eid")))
+                        data = text.encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Type", "application/pdf" if export.group("pdf") else "text/plain; charset=utf-8")
                 self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(name)}")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()

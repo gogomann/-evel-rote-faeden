@@ -14,7 +14,7 @@ import re
 import sqlite3
 import time
 
-from . import genres, kontext, llm, profiles, providers, quality, retrieval, runs, service, timeline
+from . import genres, kontext, llm, pdf, profiles, providers, quality, retrieval, runs, service, timeline
 
 NARRATOR = "Erzähler"
 TYPES = ("gegenwart", "rueckblende", "vorausblick", "parallel")
@@ -1225,3 +1225,10 @@ def export_text(conn: sqlite3.Connection, episode_id: int) -> tuple:
         raise LookupError("Folge nicht gefunden.")
     safe = re.sub(r"[^A-Za-z0-9ÄÖÜäöüß_-]+", "_", row["title"] or "Folge").strip("_")
     return f"Folge_{row['release_nr']:03d}_{safe}.txt", f"[Erzähler] Folge {row['release_nr']}: {row['title']}\n\n{row['text']}\n"
+
+
+def export_pdf(conn: sqlite3.Connection, episode_id: int) -> tuple:
+    """Folge als PDF (Dateiname, Bytes) – nur öffentliche Felder, keine Backstage-Inhalte."""
+    ep = get_episode(conn, episode_id, reveal=False)
+    name, _ = export_text(conn, episode_id)
+    return name[:-4] + ".pdf", pdf.episode_pdf(ep)

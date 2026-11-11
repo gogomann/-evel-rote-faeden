@@ -406,6 +406,7 @@ async function episodeReader(el, id) {
     <div class="card row spread"><div class="row">
         <button class="primary" id="rd-play">▶ Vorlesen</button><button class="ghost" id="rd-pause">❚❚ Pause</button><button class="ghost" id="rd-stop">■ Stopp</button>
         <select id="rd-rate"><option value="0.85">langsam</option><option value="0.95" selected>ruhig</option><option value="1.05">normal</option></select>
+        <a class="small" href="${W(`/episodes/${id}/export.pdf`)}">Als PDF</a>
         <a class="small" href="${W(`/episodes/${id}/export`)}">Als Text für das Audiobook Studio</a></div>
       <span class="small muted">${f.minuten} min · ${esc(TYP_LABEL[f.type] || f.type)}${f.genre ? ` · ${esc(f.genre)}` : ""}${f.age_rating ? ` · ${esc(f.age_rating)}` : ""} · Strang: ${esc(f.strang || "—")} · ${speakers.length} Stimmen</span></div>
     ${f.status === "freigabe" ? `<div class="banner"><span><b>Der Prüfer hat schwere Probleme gefunden.</b> Die Folge zählt erst nach deiner Freigabe
@@ -1620,7 +1621,7 @@ SUB.aufgaben = async (el) => {
 };
 
 function previewHtml() {
-  return `<div class="pv-head">Story<span style="color:var(--accent)">•</span>World</div>
+  return `<div class="pv-head">Evel<span style="color:var(--accent)"> • </span>Rote Fäden</div>
   <div class="pv-body"><div class="row"><button class="primary">Primär</button><button class="ghost">Zweitrangig</button>
     <button class="ki">KI anwerfen</button><button class="danger">Löschen</button></div>
     <div class="card"><h3>Karte</h3><div>Normaler Text <span class="muted">und gedämpfter Text</span>.</div>
