@@ -1,0 +1,5 @@
+# Zeilenenden fest: Windows-Starter brauchen CRLF, Mac-Starter LF
+*.bat text eol=crlf
+*.command text eol=lf
+*.py text eol=lf
+*.sql text eol=lf

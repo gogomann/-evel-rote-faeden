@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Story World</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span>Story<span class="dot">•</span>World</span><small>Lokale Werkstatt</small></div>
+  <div class="world-pick">
+    <select id="world-select" aria-label="Welt wählen"></select>
+    <button class="ghost" id="btn-new-world">+ Neue Welt</button>
+  </div>
+  <div class="top-right">
+    <span id="jobs-indicator" class="jobs hidden"></span>
+    <button id="btn-expert" class="reveal" title="Experte: alle Regler und Messwerte zeigen">🎛 Einfach</button>
+    <button id="btn-user" class="reveal" title="Wer bedient gerade?">👤</button>
+    <button id="btn-reveal" class="reveal" title="Backstage-Inhalte anzeigen">🔒 Spoilerschutz an</button>
+  </div>
+</header>
+<nav class="tabs" id="tabs">
+  <button data-view="uebersicht" class="active">Übersicht</button>
+  <button data-view="geschichten">Geschichten</button>
+  <button data-view="folgen">Folgen</button>
+  <button data-view="impulse">Impulse</button>
+  <button data-view="vorschlaege">Vorschläge <span class="badge hidden" id="badge-proposals"></span></button>
+  <button data-view="laeufe">KI-Läufe <span class="badge hidden" id="badge-runs"></span></button>
+  <button data-view="welt">Welt</button>
+  <button data-view="luecken">Prüfung <span class="badge hidden" id="badge-gaps"></span></button>
+  <button data-view="zeit">Zeit &amp; Reisen</button>
+  <button data-view="protokoll">Protokoll</button>
+  <button data-view="projekt">Projektstatus</button>
+  <button data-view="einstellungen">Einstellungen</button>
+</nav>
+<main id="view"></main>
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true"><div class="modal-box" id="modal-box"></div></div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="512" height="512">
+  <defs>
+    <linearGradient id="faden" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#D8402E"/>
+      <stop offset="1" stop-color="#A31F14"/>
+    </linearGradient>
+  </defs>
+
+  <!-- loser Faden, schwingt nach rechts oben weg -->
+  <path d="M 120 168
+           C 100 152, 80 136, 68 118
+           C 44 92, 47 54, 78 44
+           C 100 37, 119 52, 121 66
+           C 130 46, 160 30, 194 42"
+        fill="none" stroke="url(#faden)" stroke-width="9"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- kleines Funkeln am losen Fadenende -->
+  <g fill="#D8402E">
+    <path d="M 198 32 l 2.2 5.4 5.4 2.2 -5.4 2.2 -2.2 5.4 -2.2 -5.4 -5.4 -2.2 5.4 -2.2 z"/>
+  </g>
+
+  <!-- die anderen Fäden: blau, grün, silber -->
+  <circle cx="52" cy="188" r="4.6" fill="#3A6EA5"/>
+  <circle cx="90" cy="202" r="4.6" fill="#5A8F5A"/>
+  <circle cx="132" cy="208" r="4.6" fill="#9A9AA2"/>
+
+  <!-- Wortmarke -->
+  <text x="120" y="232" text-anchor="middle"
+        font-family="Georgia, 'Times New Roman', serif"
+        font-size="21" letter-spacing="1.5" fill="#3A2E2B">ROTE FÄDEN</text>
+</svg>

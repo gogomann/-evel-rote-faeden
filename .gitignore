@@ -1,0 +1,36 @@
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Welten, Sicherungen und lokale KI-Konfiguration enthalten Geheimnisse
+welten/
+story_world.config.json
+story_world.config.tmp
+story_world.config.defekt-*.json
+
+# Erzählprofile (persönliche Interviewantworten) – nur lokal
+story_world.profiles.json
+story_world.profiles.tmp
+story_world.profiles.defekt-*.json
+profile_texte/
+
+# System- und Arbeitsdateien
+.DS_Store
+Thumbs.db
+.mcp.json
+unsloth-tmp/
+
+# Nur lokal: Arbeitsmaterial, Archiv, Diagramme, Bildentwürfe
+/_old/
+/Logo/
+/MARKETING.md
+/architektur.*
+/datenbankschema.*
+/event-stream.*
+/folgen-lifecycle.*
+/ki-aufrufschleife.*
+/systemuebersicht.*
+/user-journey.*
