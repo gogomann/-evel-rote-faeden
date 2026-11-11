@@ -1,4 +1,4 @@
-# Projekt: Fortlaufende Sci-Fi-Welt (Hörbuch/Lesestoff)
+# Evel • Rote Fäden – fortlaufende Sci-Fi-Welt (Hörbuch/Lesestoff)
 
 ## Ziel
 Ein automatisiertes System erzeugt täglich neue Folgen einer zusammenhängenden
@@ -28,11 +28,11 @@ dürfen schreiben, ohne dass Leser/Hörer Stilbrüche merken.
 
 ## Installation auf einem neuen Rechner (Mac oder Windows)
 
-Story World braucht nur **Python 3.9 oder neuer** – keine Zusatzpakete, keine Datenbank-Installation, kein Docker.
+Evel • Rote Fäden braucht nur **Python 3.9 oder neuer** – keine Zusatzpakete, keine Datenbank-Installation, kein Docker.
 
 1. **Python**: Mac – `python3 --version` im Terminal; fehlt es, bietet macOS die Installation an (oder python.org).
    Windows – von https://www.python.org/downloads/ installieren, dabei **„Add python.exe to PATH“** ankreuzen.
-2. **Story World holen**: `git clone https://codeberg.org/gogomann/evel-rote-faeden.git` oder auf Codeberg als ZIP herunterladen und entpacken.
+2. **Evel • Rote Fäden holen**: `git clone https://codeberg.org/gogomann/evel-rote-faeden.git` oder auf Codeberg als ZIP herunterladen und entpacken.
 3. **Starten**: Mac – Doppelklick auf `Story World starten.command` (beim ersten Mal ggf. Rechtsklick → Öffnen).
    Windows – Doppelklick auf `Story World starten.bat`. Der Browser öffnet http://127.0.0.1:8765.
 4. **Einrichten**: Welt anlegen, unter Einstellungen einen KI-Anbieter eintragen (siehe „KI einrichten“).
@@ -60,7 +60,7 @@ python3 -m story_world            # Oberfläche auf http://127.0.0.1:8765 (öffn
 python3 -m unittest discover -s tests -v
 ```
 
-Oder per Doppelklick auf `Story World starten.command` (Mac) bzw. `Story World starten.bat` (Windows). Läuft Story World schon, öffnet ein zweiter Start nur den Browser. Weitere Befehle: `python3 -m story_world neu "Name"` (Welt per Kommandozeile), `python3 -m story_world migrate datei.sqlite3`
+Oder per Doppelklick auf `Story World starten.command` (Mac) bzw. `Story World starten.bat` (Windows). Läuft Evel • Rote Fäden schon, öffnet ein zweiter Start nur den Browser. Weitere Befehle: `python3 -m story_world neu "Name"` (Welt per Kommandozeile), `python3 -m story_world migrate datei.sqlite3`
 (ältere Datenbank auf aktuelles Schema bringen, mit automatischer Sicherung), `python3 -m story_world ui --port 8800 --kein-browser`.
 
 ### KI einrichten
@@ -91,7 +91,7 @@ bleibt die Folge trotzdem erhalten; bricht der Autor ab, wird der bisherige Text
 - **Deine Seite** (👤 oben rechts): Einschätzung der KI (Erzählprofil), die Befragung und deine **Texte als Basis**.
   Texte einfügen oder hochladen (txt, md, html, docx, odt, epub, rtf, pdf mit `pdftotext`). Als Stilprobe markiert, prägen
   sie das Erzählprofil; „In Welt einlesen“ macht daraus abschnittsweise Kanon-Vorschläge für eine Welt.
-- Beim Start fragt Story World, wer gerade bedient (kein Login): bekannte Menschen mit „zuletzt genutzt“ oder „Neuer Mensch“.
+- Beim Start fragt Evel • Rote Fäden, wer gerade bedient (kein Login): bekannte Menschen mit „zuletzt genutzt“ oder „Neuer Mensch“.
 - Neue Menschen führen ein kurzes Interview (12 indirekte Fragen, Stilproben). Die KI verdichtet es zum **Erzählprofil**
   (Stimme, Rhythmus, Humor, Motive, Werte, innere Motivation, Tabus) und stellt gezielte Nachfragen. Alles änderbar unter
   Einstellungen → Menschen & Profile. Gespeichert nur lokal in `story_world.profiles.json` (0600, nicht in Git).
@@ -139,7 +139,7 @@ Für Claude Code `mcp.example.json` nach `.mcp.json` kopieren und den Pfad anpas
 ```json
 "story-world": {
   "command": "python3",
-  "args": ["/PFAD/ZU/Story_world/story_world_mcp.py"]
+  "args": ["/PFAD/ZU/evel-rote-faeden/story_world_mcp.py"]
 }
 ```
 

@@ -3,7 +3,7 @@
     "story-world": {
       "command": "python3",
       "args": [
-        "/PFAD/ZU/Story_world/story_world_mcp.py"
+        "/PFAD/ZU/evel-rote-faeden/story_world_mcp.py"
       ]
     }
   }
