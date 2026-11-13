@@ -45,3 +45,13 @@ Quelle: Vorgaben des Nutzers (2026-11-07). Ergänzt `WELT_REGELN.md`, ändert si
 - Anfang, Mitte und Ende lassen sich beim Erzeugen einer Folge gezielt vorgeben (verbindlich für den Planer).
 - Technisch: Planer plant „einstieg“ und ordnet Kapitel anfang/mitte/ende zu; Autor bekommt den Einstieg als Auftrag;
   Prüfer meldet „Einstieg:“/„Ende:“-Mängel, der Lektor schreibt den Anfang dann neu.
+
+## Form: Folge oder eigenständige Geschichte (Vorgabe des Nutzers, 2026-11-13)
+- **Folge der Reihe** (Standard): knüpft an die vorige Folge an, endet mit Ruhepunkt und Überleitung.
+- **Eigenständige Geschichte**: spielt in derselben Welt und wird wie eine Folge in den Kanon eingetragen (Archivar),
+  ist aber für jemanden erzählt, der die Welt nicht kennt.
+  - Entrée: nur der Ausschnitt der Welt, den diese Geschichte braucht (Ort, Zeit, wichtige Figuren, nötige Prinzipien),
+    organisch über die Einstiegsfigur – kein Lexikon, keine Vorrede. Der Planer legt ihn im Feld `entree` fest.
+  - Kein Vorwissen: Figuren, Begriffe, Technik und frühere Ereignisse werden beim ersten Auftreten kurz verständlich.
+    Der Prüfer meldet Lücken als „Neuling:“, zu viel Welterklärung als „Neuling: zu viel“; der Lektor setzt beides um.
+  - Abschluss: geschlossenes Ende, ruhiges Schlussbild – keine Überleitung, kein Cliffhanger.

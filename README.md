@@ -19,6 +19,7 @@ dürfen schreiben, ohne dass Leser/Hörer Stilbrüche merken.
 - DATENMODELL.md: Datenbank
 - HOERBUCH.md: Audio-Produktion
 - OFFENE_PUNKTE.md: ungeklärte Fragen
+- prozess.html: interaktive Übersicht, wie eine Folge entsteht (im Browser öffnen)
 
 ## Auftrag an die PC-KI
 1. Alle Dateien lesen.
@@ -39,7 +40,11 @@ Evel • Rote Fäden braucht nur **Python 3.9 oder neuer** – keine Zusatzpaket
 
 Beim ersten Start entstehen im Projektordner automatisch `welten/` sowie die lokalen Dateien für Einstellungen,
 Profile und Qualität. Sie gehören nur diesem Rechner und sind per `.gitignore` vom Repository ausgeschlossen.
-**Umzug mit Daten**: Projektordner kopieren oder `welten/`, `story_world.config.json`, `story_world.profiles.json`,
+**Umzug mit Daten**: Einstellungen → Sicherung → „Export & Umzug“. Erst den **Autor** exportieren (Erzählprofile,
+eigene Texte, Stimmen), dann die **Welten** – oder „Alles“. Auf dem neuen Rechner in derselben Reihenfolge importieren.
+Ein Welt-Export bringt alle Stimmen der Welt mit; Texte als Basis sind dort nur als Auszüge enthalten und bleiben
+verborgen, wenn der Mensch (Profil-ID) auf dem Zielrechner nicht bekannt ist. Exporte liegen in `exporte/`.
+Alternativ von Hand: `welten/`, `story_world.config.json`, `story_world.profiles.json`, `story_world.stimmen.json`,
 `profile_texte/` und `story_world.qualitaet.sqlite3` in die neue Installation legen.
 
 | Funktion | Mac | Windows |
@@ -76,9 +81,15 @@ Schlüssel liegen nur lokal in `story_world.config.json` (Dateirechte 0600, per 
 Oberfläche nie vollständig angezeigt. Entfernte Anbieter landen im Archiv und lassen sich wiederherstellen.
 Für Skripte/CI gibt es weiterhin `STORY_LLM_BASE_URL`, `STORY_LLM_MODEL`, `STORY_LLM_API_KEY` (erscheint als Anbieter „Umgebungsvariablen“).
 
-### Folgen
+### Folgen und eigenständige Geschichten
 Reiter **Geschichten** → bestehende Geschichte weitererzählen, neue Geschichte in einem Genre beginnen oder „Planer entscheidet“;
-dazu Wunsch, Länge und Altersfreigabe (legst du fest, die Genre-Vorgabe steht nur als Info daneben). Die Pipeline:
+dazu Wunsch, Länge, Altersfreigabe (legst du fest, die Genre-Vorgabe steht nur als Info daneben), Stimme und **Form**:
+- **Folge der Reihe**: knüpft an die vorige Folge an, endet mit Ruhepunkt und Überleitung.
+- **Eigenständige Geschichte**: für Hörer, die die Welt nicht kennen – Entrée nur mit den Weltdetails, die diese Geschichte
+  braucht (der Planer legt sie im Feld `entree` fest), keine Anspielungen auf Vorwissen, geschlossenes Ende ohne Überleitung.
+  Der Prüfer meldet Unverständliches als „Neuling:“. Die Geschichte wird trotzdem wie jede Folge in den Kanon eingetragen.
+
+Die Pipeline:
 **Planer** (Strang, Zeit, Figuren, Kapitel; legt Fehlendes selbst an) → **Autor** (Kapitel für Kapitel) →
 **Kontinuitätsprüfer** → **Lektor** → **Archivar** (Zusammenfassung, Zeit-Cursor, neue Fakten in den Kanon).
 Der Text steht im Format `[Erzähler] …` / `[Name] …` – direkt nutzbar fürs Hörbuch („Als Text für das Audiobook Studio“).
@@ -86,11 +97,26 @@ Die Leseansicht kann mit den Systemstimmen vorlesen. Modelle je Schritt unter Ei
 Standard-Länge (Einstellungen → Diese Welt): 8000 Wörter ≈ 60 Minuten. Scheitern Prüfer, Lektor oder Archivar,
 bleibt die Folge trotzdem erhalten; bricht der Autor ab, wird der bisherige Text als Entwurf gesichert.
 
+### Schreibstil (Stimmen)
+Reiter **Schreibstil**: Eine **Stimme** ist der virtuelle Autor einer Folge – „schreibt wie Stanisław Lem“ (bekannter Autor,
+nur Stilbeschreibung, nie Originaltext), „schreibt wie Ralf“ (eigene Texte als Basis, kurze Auszüge als Stilanker) oder frei
+beschrieben. Die KI erstellt daraus einen **Stil-Steckbrief** (11 Felder, alles änderbar); **Regler** (Satzlänge, Bildsprache,
+Dialoganteil, Humor, Tempo, Nähe zum Vorbild) und verbindliche **Hinweise** justieren ihn. Eine **Probe** zeigt die Stimme in
+einer kurzen Szene der Welt, lässt sich als Hörbuch mit einer TTS-Stimme vorlesen und wird nach Freigabe zum Stilanker und
+messbaren Maßstab.
+- Gilt für Folge, Geschichte oder Welt – Vorrang in dieser Reihenfolge. Stimmen liegen außerhalb der Welten in
+  `story_world.stimmen.json` (nicht in Git) und sind in jeder Welt nutzbar.
+- Ein gemeinsamer Maßstab für alle Rollen: Planer, Autor und Lektor schreiben nach dem Steckbrief, der Prüfer prüft dagegen
+  (inkl. Messwerten) und meldet „Stil:“-Befunde, die Stil-Messung vergleicht mit den eigenen Texten bzw. der freigegebenen Probe.
+- Ist eine Stimme gesetzt, liefert das Erzählprofil nur noch Publikum, Genres und Tabus.
+- Feinjustieren gehört dazu: Ein zu eng formulierter Steckbrief klingt hölzern – Regler, Hinweise und Probe sind dafür da.
+
 ### Menschen, Erzählprofil und Genres
 
 - **Deine Seite** (👤 oben rechts): Einschätzung der KI (Erzählprofil), die Befragung und deine **Texte als Basis**.
   Texte einfügen oder hochladen (txt, md, html, docx, odt, epub, rtf, pdf mit `pdftotext`). Als Stilprobe markiert, prägen
-  sie das Erzählprofil; „In Welt einlesen“ macht daraus abschnittsweise Kanon-Vorschläge für eine Welt.
+  sie das Erzählprofil; „In Welt einlesen“ macht daraus abschnittsweise Kanon-Vorschläge für eine Welt. Texte anderer Autoren
+  als **„fremder Text“** markieren – sie sind nie Stilprobe und nie Basis einer Stimme.
 - Beim Start fragt Evel • Rote Fäden, wer gerade bedient (kein Login): bekannte Menschen mit „zuletzt genutzt“ oder „Neuer Mensch“.
 - Neue Menschen führen ein kurzes Interview (12 indirekte Fragen, Stilproben). Die KI verdichtet es zum **Erzählprofil**
   (Stimme, Rhythmus, Humor, Motive, Werte, innere Motivation, Tabus) und stellt gezielte Nachfragen. Alles änderbar unter
@@ -115,6 +141,19 @@ Jeder KI-Auftrag wird dauerhaft in der Welt protokolliert (Reiter **KI-Läufe**)
 der **Auftrag** an die KI, der **Weg** mit Uhrzeit (Kontext, welches Modell, Ausweich bei Fehlern, Prüfung, Übernahme) und das
 **Ergebnis**. Die Antwort der KI läuft live mit (Streaming). Live-Antwort, Rohantwort und vollständiger Prompt können
 Geheimnisse enthalten und sind nur mit „Backstage“ sichtbar.
+
+**Nachvollzug** (Karte im Lauf, live während des Laufs): je Schritt, welche Gewichtung hineinging (Stimme, Form,
+Überraschungsstufe, Genre, Länge, Modelle), welche Frage an die KI ging und was zurückkam, wie bewertet wurde (Regel und
+Grenze) und ob durchgelassen ✔, eingegriffen ✋, gewarnt ⚠ oder auf dich gewartet 👤 wurde – z. B. Szenario-Bewertung,
+Korrekturrunden, Modellwechsel, jeder Prüfer-Befund, was der Lektor geändert hat, Qualitätswerte, Freigabe. Änderungen an der
+Welt sind dem Lauf zugeordnet. Läufe von vorher werden aus den vorhandenen Daten zusammengesetzt und als „rekonstruiert“ markiert.
+
+### Export & Umzug
+Einstellungen → Sicherung → „Export & Umzug“: **Welt** (Kanon, Folgen, Nachvollzug und alle Stimmen der Welt; Texte als Basis
+nur als Auszüge, eingelesene Texte, die schon im Kanon stecken, ohne Inhalt), **Autor** (Erzählprofile, eigene Texte vollständig,
+alle Stimmen) oder **Alles**. Import legt Welten immer neu an. Die Profil-ID entscheidet über die Sichtbarkeit: Ist der Mensch
+auf dem Zielrechner bekannt, sind seine Texte sichtbar – sonst liegen sie verborgen und werden trotzdem genutzt; kommt er später
+per Autor-Import dazu, wird alles sichtbar. „Verborgen“ gilt für die Oberfläche – die ZIP-Datei selbst ist nicht verschlüsselt.
 
 ### Darstellung
 Einstellungen → Darstellung: Hell, Dunkel, Bunt oder ein eigenes Theme mit allen Farben (Akzent, KI-Farbe, Erfolg/Warnung/Fehler …)

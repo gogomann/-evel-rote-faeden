@@ -1,0 +1,69 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Story World: So entsteht eine Folge",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "main", "label": "Ablauf einer Folge (Fortschritt im Protokoll)" },
+    { "id": "ausnahme", "label": "Abzweige und Hintergrund", "variant": "exception" }
+  ],
+  "mainPath": ["auftrag", "planer", "vorbereitung", "autor", "pruefer", "lektor", "speichern", "archivar", "bewertung", "fertig", "erleben"],
+  "nodes": [
+    { "id": "auftrag",      "lane": "main", "col": 0,  "type": "frontend", "label": "Auftrag",      "sublabel": "0–2 %" },
+    { "id": "planer",       "lane": "main", "col": 1,  "type": "backend",  "label": "Planer",       "sublabel": "2–12 % · KI" },
+    { "id": "vorbereitung", "lane": "main", "col": 2,  "type": "database", "label": "Vorbereitung", "sublabel": "12–15 % · Code" },
+    { "id": "autor",        "lane": "main", "col": 3,  "type": "backend",  "label": "Autor",        "sublabel": "15–75 % · KI" },
+    { "id": "pruefer",      "lane": "main", "col": 4,  "type": "security", "label": "Prüfer",       "sublabel": "76–82 % · KI" },
+    { "id": "lektor",       "lane": "main", "col": 5,  "type": "backend",  "label": "Lektor",       "sublabel": "82–92 % · KI" },
+    { "id": "speichern",    "lane": "main", "col": 6,  "type": "database", "label": "Speichern",    "sublabel": "93 % · Code" },
+    { "id": "archivar",     "lane": "main", "col": 7,  "type": "backend",  "label": "Archivar",     "sublabel": "93–97 % · KI" },
+    { "id": "bewertung",    "lane": "main", "col": 8,  "type": "security", "label": "Bewertung",    "sublabel": "97–99 % · Code" },
+    { "id": "fertig",       "lane": "main", "col": 9,  "type": "frontend", "label": "Fertig",       "sublabel": "100 %" },
+    { "id": "erleben",      "lane": "main", "col": 10, "type": "external", "label": "Erleben",      "sublabel": "lesen · hören" },
+    { "id": "szenario",     "lane": "ausnahme", "col": 1, "type": "frontend", "label": "Szenarien",      "sublabel": "wartet auf dich" },
+    { "id": "neuplanen",    "lane": "ausnahme", "col": 2, "type": "external", "label": "Neu planen",     "sublabel": "max. 2 Versuche" },
+    { "id": "entwurf",      "lane": "ausnahme", "col": 3, "type": "external", "label": "Entwurf",        "sublabel": "Abbruch mit Text" },
+    { "id": "freigabe",     "lane": "ausnahme", "col": 8, "type": "security", "label": "Freigabe",       "sublabel": "schwere Probleme" },
+    { "id": "weltentw",     "lane": "ausnahme", "col": 9, "type": "database", "label": "Weltentwicklung", "sublabel": "backstage" }
+  ],
+  "edges": [
+    { "from": "auftrag",      "to": "planer",       "label": "Wunsch",       "variant": "emphasis" },
+    { "from": "planer",       "to": "vorbereitung", "label": "Plan",         "variant": "emphasis" },
+    { "from": "vorbereitung", "to": "autor",        "label": "Besetzung",    "variant": "emphasis" },
+    { "from": "autor",        "to": "pruefer",      "label": "Kapitel",      "variant": "emphasis" },
+    { "from": "pruefer",      "to": "lektor",       "label": "Hinweise",     "variant": "emphasis" },
+    { "from": "lektor",       "to": "speichern",    "label": "Text",         "variant": "emphasis" },
+    { "from": "speichern",    "to": "archivar",     "label": "Folge #n",     "variant": "emphasis" },
+    { "from": "archivar",     "to": "bewertung",    "label": "Kanon",        "variant": "emphasis" },
+    { "from": "bewertung",    "to": "fertig",       "label": "bestanden",    "variant": "emphasis" },
+    { "from": "fertig",       "to": "erleben",      "label": "öffnen",       "variant": "emphasis" },
+    { "from": "planer",       "to": "szenario",     "label": "mehrere",      "role": "branch" },
+    { "from": "szenario",     "to": "vorbereitung", "label": "deine Wahl",   "role": "return" },
+    { "from": "vorbereitung", "to": "neuplanen",    "label": "nicht machbar","role": "error" },
+    { "from": "neuplanen",    "to": "planer",       "label": "neuer Plan",   "role": "return" },
+    { "from": "autor",        "to": "entwurf",      "label": "Abbruch",      "role": "error" },
+    { "from": "bewertung",    "to": "freigabe",     "label": "Schwere hoch", "role": "branch" },
+    { "from": "freigabe",     "to": "fertig",       "label": "freigeben",    "role": "return" },
+    { "from": "bewertung",    "to": "weltentw",     "label": "anstoßen",     "role": "branch" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Wer arbeitet",
+      "items": [
+        "Planer, Autor, Prüfer, Lektor und Archivar sind KI-Rollen – Modelle unter „Modelle je Aufgabe“.",
+        "Vorbereitung, Speichern und Bewertung sind reiner Code, ohne KI-Kosten."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Nichts geht verloren",
+      "items": [
+        "Ab 93 % ist die Folge gespeichert – scheitert der Archivar, bleibt sie erhalten.",
+        "Bricht der Autor ab, wird vorhandener Text als Entwurf gesichert."
+      ]
+    }
+  ]
+}

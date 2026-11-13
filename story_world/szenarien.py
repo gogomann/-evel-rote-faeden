@@ -107,6 +107,9 @@ def expectation(conn, run, thread_id: int | None, wish: str) -> dict:
 
     data = episodes._ask_json(run, messages, "erwartung", 4, 6, 1200, "Erwartung", validate)
     run.step(f"Erwartung des Hörers: {str(data.get('erwartung', ''))[:140]}", 6, "ok")
+    episodes._ev(run, "szenario", "frage", "Erwartung des Hörers vorhergesagt (Maßstab für die Überraschung)",
+                 ausgang="ok", call_id=getattr(run, "last_call_id", None), ergebnis=data,
+                 regel="Nur öffentliches Wissen – so, wie ein Hörer die nächste Folge erwarten würde.")
     return data
 
 
@@ -143,6 +146,8 @@ def plan_scenarios(conn, run, wish: str, thread_id: int | None, words: int, leve
         errors = episodes.plan_check(conn, p) if isinstance(p, dict) else ["kein Objekt"]
         if errors:
             run.step(f"Szenario {i} verworfen: {'; '.join(errors)}", None, "warnung")
+            episodes._ev(run, "szenario", "eingriff", f"Szenario {i} verworfen (Plan-Prüfung)", ausgang="eingriff",
+                         regel="Jedes Szenario muss die Plan-Prüfung bestehen.", ergebnis={"fehler": errors[:8]})
             continue
         level = p.get("abweichung")
         p["abweichung"] = level if isinstance(level, int) and 0 <= level <= 3 else levels[min(i - 1, len(levels) - 1)]
@@ -239,7 +244,7 @@ def store(conn, run, p: dict, expected: dict, plans: list, ratings: list, chosen
     cur = conn.execute(
         "INSERT INTO scenario_sets (run_id, status, params, erwartung, szenarien, bewertungen, gewaehlt) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (run.id, "gewaehlt" if chosen else "offen", json.dumps(dict(p, begruendung=reason), ensure_ascii=False),
+        (run.id, "gewaehlt" if chosen else "offen", json.dumps(dict(p, begruendung=reason, form=getattr(run, "form", "folge")), ensure_ascii=False),
          json.dumps(expected, ensure_ascii=False), json.dumps(plans, ensure_ascii=False),
          json.dumps(ratings, ensure_ascii=False), chosen))
     conn.commit()
@@ -298,6 +303,8 @@ def run_flow(conn, run, wish: str, thread_id: int | None, words: int, p: dict) -
         ratings = evaluate(conn, run, expected, plans)
     except (episodes.EpisodeError, llm.LLMError) as exc:
         run.step(f"Bewerter übersprungen: {exc} – Szenario mit der gewählten Stufe wird genommen", None, "warnung")
+        episodes._ev(run, "szenario", "warnung", "Bewerter fehlgeschlagen – Szenario nach Stufe statt nach Bewertung",
+                     ausgang="warnung", ergebnis={"grund": str(exc)})
         ratings = [{"nr": i, "titel": pl.get("titel", ""), "abweichung": pl.get("abweichung", 0), "idee": pl.get("idee", ""),
                     "kanonpassung": None, "ueberraschung": None, "fair": True, "widersprueche": [], "begruendung": ""}
                    for i, pl in enumerate(plans, 1)]
@@ -306,13 +313,26 @@ def run_flow(conn, run, wish: str, thread_id: int | None, words: int, p: dict) -
         nr = next((r["nr"] for r in ratings if r["abweichung"] == p["abweichung"]), 1)
         sid = store(conn, run, p, expected, plans, ratings, nr, "Bewerter fehlgeschlagen")
         return plans[nr - 1], sid
+    call = getattr(run, "last_call_id", None)
+    rule = (f"Kommt in Frage: Kanon ≥ {p['min_kanon']:g}" + (" und fair" if p["abweichung"] >= 2 else "")
+            + f"; davon gewinnt die Überraschung am nächsten am Ziel {p['ziel']:g}. "
+              "Jede harte Code-Prüfung (z. B. tote Figur, Zeit vor dem Strang-Cursor) zieht 3 Kanon-Punkte ab.")
     for r in ratings:
         run.step(f"Szenario {r['nr']} „{r['titel']}“: Kanon {r['kanonpassung']:g}, Überraschung {r['ueberraschung']:g}"
                  f"{'' if r['fair'] else ', unfair'}", None, "info")
+        fits = r["kanonpassung"] >= p["min_kanon"] and (r["fair"] or p["abweichung"] < 2)
+        episodes._ev(run, "szenario", "bewertung",
+                     f"Szenario {r['nr']} „{r['titel']}“: Kanon {r['kanonpassung']:g}, Überraschung {r['ueberraschung']:g}"
+                     + ("" if r["fair"] else ", unfair") + ("" if fits else " – fällt durch"),
+                     regel=rule, ausgang="ok" if fits else "warnung", call_id=call, backstage=True,
+                     eingaben={"stufe": r["abweichung"], "idee": r["idee"]},
+                     ergebnis={k: r[k] for k in ("kanonpassung", "ueberraschung", "fair", "widersprueche", "begruendung")})
     if p["wahl"] == "ich":
         sid = store(conn, run, p, expected, plans, ratings, None, "wartet auf deine Wahl")
         return None, sid
     nr, reason = choose(ratings, p["ziel"], p["min_kanon"], p["abweichung"])
     run.step(f"Gewählt: Szenario {nr} – {reason}", 14, "ok")
+    episodes._ev(run, "szenario", "entscheidung", f"Automatisch gewählt: Szenario {nr} „{plans[nr - 1].get('titel', '')}“",
+                 regel=rule, ausgang="ok", ergebnis={"gewaehlt": nr, "begruendung": reason})
     sid = store(conn, run, p, expected, plans, ratings, nr, reason)
     return plans[nr - 1], sid

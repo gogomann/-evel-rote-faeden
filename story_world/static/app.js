@@ -117,7 +117,7 @@ function go(view, id = null) {
 const VIEWS = {};
 async function render() {
   const el = $("#view");
-  if (!S.world && !["projekt", "einstellungen", "mensch"].includes(S.view)) {
+  if (!S.world && !["projekt", "einstellungen", "mensch", "stil"].includes(S.view)) {
     el.innerHTML = `<div class="card empty"><h2>Noch keine Welt</h2><p>Lege deine erste Welt an – auf Wunsch mit dem Startbestand aus WELT_REGELN.md.</p>
       <button class="primary" data-newworld="1">+ Neue Welt anlegen</button></div>`;
     return;
@@ -259,7 +259,7 @@ VIEWS.folgen = async (el) => {
     <p class="muted">Planer → Autor (kapitelweise) → Kontinuitätsprüfer → Lektor → Archivar. Den Fortschritt siehst du oben und unter „KI-Läufe“.</p>
     ${folgen.length ? `<div class="stack">${folgen.map((f) => `<div class="card click" data-ep="${f.id}">
       <div class="row spread"><div class="row"><span class="stat" style="font-size:20px">${f.release_nr}</span><b>${esc(f.title || "Ohne Titel")}</b>
-        <span class="chip">${esc(TYP_LABEL[f.type] || f.type)}</span>${f.status === "entwurf" ? '<span class="chip st-offen">Entwurf</span>' : ""}
+        <span class="chip">${esc(TYP_LABEL[f.type] || f.type)}</span>${f.form === "geschichte" ? '<span class="chip st-fertig">eigenständige Geschichte</span>' : ""}${f.status === "entwurf" ? '<span class="chip st-offen">Entwurf</span>' : ""}
         ${f.status === "freigabe" ? '<span class="chip st-fehler">wartet auf Freigabe</span>' : ""}${warnChip(f.metrics)}${f.audio_path ? '<span class="chip st-fertig">🎧</span>' : ""}</div>
         <span class="small muted">${f.minuten} min · ${f.word_count || 0} Wörter</span></div>
       <div class="small muted" style="margin-top:4px">${f.genre ? `Genre: ${esc(f.genre)} · ` : ""}${f.age_rating ? `${esc(f.age_rating)} · ` : ""}Strang: ${esc(f.strang || "—")} · Weltzeit ${esc(f.world_start)}–${esc(f.world_end)} · erzeugt ${esc(f.created_at || "")}</div></div>`).join("")}</div>`
@@ -285,7 +285,10 @@ function qualityText(raw) {
 // ------------------------------------------------------------ Geschichte wählen (Erstellungsseite)
 
 VIEWS.geschichten = async (el) => {
-  const [st, o, sz] = await Promise.all([api(W("/stories")), api(W("/overview")), api(W("/szenarien"))]);
+  const [st, o, sz, vc] = await Promise.all([api(W("/stories")), api(W("/overview")), api(W("/szenarien")),
+    api("/api/stimmen").catch(() => ({ stimmen: [] }))]);
+  const voiceBy = Object.fromEntries(vc.stimmen.map((v) => [v.id, v]));
+  const worldVoice = voiceBy[o.meta.einstellungen.stimme || ""];
   const words = Number(o.meta.einstellungen.folge_woerter || 8000);
   const std = Number(o.meta.einstellungen.standard_genre || 0);
   const pick = S.storyPick || { art: "auto" };
@@ -349,6 +352,11 @@ VIEWS.geschichten = async (el) => {
         <div class="field"><label>Länge (Wörter)</label><input id="ep-words" type="number" min="500" max="20000" step="500" value="${words}"></div>
         <div class="field"><label>Überraschung</label><select id="ep-abw"><option value="">${s && s.abweichung != null ? "wie die Geschichte" : g && g.abweichung != null ? "wie das Genre" : "Welt-Standard"}</option>
           ${ABW.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></div>
+        <div class="field"><label>Form</label><select id="ep-form" title="Folge: setzt die Reihe fort. Geschichte: in sich abgeschlossen, für Hörer ohne Vorwissen – trotzdem Teil der Welt.">
+          <option value="folge">Folge der Reihe</option><option value="geschichte">Eigenständige Geschichte</option></select></div>
+        <div class="field"><label>Stimme (Schreibstil)</label><select id="ep-voice">
+          <option value="">${s && voiceBy[s.stimme_id] ? `wie die Geschichte (${esc(voiceBy[s.stimme_id].name)})` : worldVoice ? `Welt-Standard (${esc(worldVoice.name)})` : "keine – Erzählprofil"}</option>
+          ${vc.stimmen.map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("")}</select></div>
         <div class="field expert"><label>Szenarien</label><select id="ep-szen"><option value="">Welt-Standard</option>
           <option value="1">1 – direkt</option><option value="2">2 – Bewerter wählt</option><option value="3">3 – Bewerter wählt</option></select></div></div>
       <p class="small muted" id="ep-min"></p>
@@ -356,10 +364,13 @@ VIEWS.geschichten = async (el) => {
         ${preset ? `Vorausgewählt ist die Freigabe der letzten Folge (${esc(preset)}).` : ""}<br>
         ⚠ Nicht jedes Modell schreibt jedes Genre oder jede Freigabe mit. Verweigert ein Modell, springt automatisch die nächste Wahl
         unter „Modelle je Aufgabe → Autor“ ein. Tabus sind Vorgaben, keine Garantie – Verstöße erscheinen als Warnung an der Folge.</div>
-      <p class="small muted">Erzählstimme: ${S.user ? `<b>${esc(S.user.name)}</b>${S.user.status === "fertig" ? "" : " (Profil noch nicht ausgewertet)"}` : "kein Profil gewählt – oben rechts „👤“"}</p></div>
+      <p class="small muted">Stil kommt von der Stimme (Seite „Schreibstil“), Publikum und Tabus vom Erzählprofil:
+        ${S.user ? `<b>${esc(S.user.name)}</b>` : "kein Profil gewählt – oben rechts „👤“"}.
+        ${!vc.stimmen.length ? ' Noch keine Stimme angelegt – <a href="#" id="ep-to-stil">jetzt anlegen</a>.' : ""}</p></div>
       <div class="row" style="justify-content:flex-end"><button class="ki" id="ep-go">Folge erzeugen</button></div>`;
     const upd = () => { $("#ep-min").textContent = `≈ ${Math.round(Number($("#ep-words").value) / 135)} Minuten Hörzeit. Für einen ersten Probelauf reichen 1500–2500 Wörter.`; };
     $("#ep-words").oninput = upd; upd();
+    if ($("#ep-to-stil")) $("#ep-to-stil").onclick = (e) => { e.preventDefault(); S.stimmeNeu = true; go("stil"); };
     $("#ep-go").onclick = () => guard(async () => {
       $("#ep-go").disabled = true;
       try {
@@ -369,7 +380,8 @@ VIEWS.geschichten = async (el) => {
           thread_id: p.art === "strang" ? p.id : null, neue_geschichte: p.art === "neu",
           genre_id: p.art === "neu" ? p.genre : ($("#ep-genre") && $("#ep-genre").value) || null,
           altersfreigabe: $("#ep-age").value || null, profil_id: S.user ? S.user.id : null,
-          abweichung: $("#ep-abw").value || null, szenarien: ($("#ep-szen") && S.expert && $("#ep-szen").value) || null } });
+          abweichung: $("#ep-abw").value || null, szenarien: ($("#ep-szen") && S.expert && $("#ep-szen").value) || null,
+          stimme_id: $("#ep-voice").value || null, form: $("#ep-form").value } });
       } finally { $("#ep-go").disabled = false; }
       toast("Die Folge entsteht – Fortschritt oben rechts und unter „KI-Läufe“."); pollJobs();
     });
@@ -402,7 +414,7 @@ async function episodeReader(el, id) {
   const f = await api(W(`/episodes/${id}`));
   const speakers = [...new Set(f.segmente.map((s) => s.sprecher))];
   el.innerHTML = `<div class="stack"><div class="row"><button class="ghost" id="ep-back">← Alle Folgen</button>
-      <h2 style="margin:0">Folge ${f.release_nr}: ${esc(f.title || "")}</h2>${f.status === "entwurf" ? '<span class="chip st-offen">Entwurf</span>' : ""}</div>
+      <h2 style="margin:0">${f.form === "geschichte" ? "Geschichte" : `Folge ${f.release_nr}`}: ${esc(f.title || "")}</h2>${f.status === "entwurf" ? '<span class="chip st-offen">Entwurf</span>' : ""}</div>
     <div class="card row spread"><div class="row">
         <button class="primary" id="rd-play">▶ Vorlesen</button><button class="ghost" id="rd-pause">❚❚ Pause</button><button class="ghost" id="rd-stop">■ Stopp</button>
         <select id="rd-rate"><option value="0.85">langsam</option><option value="0.95" selected>ruhig</option><option value="1.05">normal</option></select>
@@ -705,9 +717,10 @@ VIEWS.mensch = async (el) => {
   const open = (p.nachfragen || []).filter((n) => !n.antwort);
   const texte = p.texte || [];
   const textCard = (t) => `<div class="card" data-text="${t.id}"><div class="row spread"><div><b>${esc(t.titel)}</b>
-      <div class="small muted">${esc(t.quelle || "")} · ${t.woerter.toLocaleString("de-DE")} Wörter · ${esc(t.erstellt)}
+      <div class="small muted">${t.fremd ? `<span class="chip st-offen">fremder Text${t.autor ? ` · ${esc(t.autor)}` : ""}</span> · ` : ""}${esc(t.quelle || "")} · ${t.woerter.toLocaleString("de-DE")} Wörter · ${esc(t.erstellt)}
         ${(t.eingelesen || []).map((e) => ` · <span class="chip st-fertig">in „${esc(e.welt)}“ eingelesen ${esc(e.am)}</span>`).join("")}</div></div>
-      <div class="row"><label class="small row" style="gap:6px"><input type="checkbox" data-stil="${t.id}" ${t.stil ? "checked" : ""} style="width:auto"> Stilprobe</label>
+      <div class="row"><label class="small row" style="gap:6px"><input type="checkbox" data-stil="${t.id}" ${t.stil ? "checked" : ""} ${t.fremd ? "disabled" : ""} style="width:auto"> Stilprobe</label>
+        <label class="small row" style="gap:6px" title="Text eines anderen Autors: keine Stilprobe, im Welt-Export nicht enthalten"><input type="checkbox" data-fremd="${t.id}" ${t.fremd ? "checked" : ""} style="width:auto"> fremder Text</label>
         <button class="ghost" data-show-text="${t.id}">Lesen</button>
         <button class="ki" data-import="${t.id}">In Welt einlesen</button>
         <button class="danger" data-arch-text="${t.id}">Ins Archiv</button></div></div>
@@ -748,7 +761,9 @@ VIEWS.mensch = async (el) => {
       Texte bleiben lokal; an die KI gehen sie nur beim Auswerten und Einlesen.</p>
     <div class="card"><div class="form">
       <div class="row"><div class="field" style="flex:1"><label>Titel</label><input id="mp-t-titel" placeholder="optional – sonst Dateiname oder erste Zeile"></div>
-        <label class="small row" style="gap:6px;align-self:end;margin-bottom:10px"><input type="checkbox" id="mp-t-stil" checked style="width:auto"> von mir geschrieben – als Stilprobe nutzen</label></div>
+        <label class="small row" style="gap:6px;align-self:end;margin-bottom:10px"><input type="checkbox" id="mp-t-stil" checked style="width:auto"> von mir geschrieben – als Stilprobe nutzen</label>
+        <label class="small row" style="gap:6px;align-self:end;margin-bottom:10px"><input type="checkbox" id="mp-t-fremd" style="width:auto"> fremder Text</label>
+        <div class="field hidden" id="mp-t-autor-f" style="flex:1"><label>Autor des fremden Texts</label><input id="mp-t-autor" placeholder="z. B. u/MYSFITS_OFFICIAL"></div></div>
       <div class="field"><label>Text einfügen</label><textarea id="mp-t-text" style="min-height:120px" placeholder="Text hier einfügen …"></textarea></div>
       <div class="row spread"><span class="small muted">oder Dateien: <input type="file" id="mp-t-file" multiple accept="${p.formate.join(",")}" style="width:auto">
         <br>${p.formate.join(" ")}</span>
@@ -785,19 +800,27 @@ VIEWS.mensch = async (el) => {
   });
   $("#mp-t-add").onclick = () => guard(async () => {
     const files = [...$("#mp-t-file").files];
-    const stil = $("#mp-t-stil").checked, titel = $("#mp-t-titel").value.trim();
+    const fremd = $("#mp-t-fremd").checked, autor = $("#mp-t-autor").value.trim();
+    const stil = $("#mp-t-stil").checked && !fremd, titel = $("#mp-t-titel").value.trim();
     if (!files.length && !$("#mp-t-text").value.trim()) throw new Error("Bitte Text einfügen oder eine Datei wählen.");
     $("#mp-t-add").disabled = true;
     try {
-      if ($("#mp-t-text").value.trim()) await api(`${P}/texte`, { method: "POST", body: { titel, text: $("#mp-t-text").value, stil } });
+      if ($("#mp-t-text").value.trim()) await api(`${P}/texte`, { method: "POST", body: { titel, text: $("#mp-t-text").value, stil, fremd, autor } });
       for (const f of files) {
         if (f.size > 8_000_000) { toast(`${f.name}: zu groß (max. 8 MB).`, "bad"); continue; }
         await api(`${P}/texte`, { method: "POST", body: { titel: files.length === 1 ? titel : "", dateiname: f.name,
-          daten_b64: b64(await f.arrayBuffer()), stil } });
+          daten_b64: b64(await f.arrayBuffer()), stil, fremd, autor } });
       }
       toast("Text gespeichert.", "ok");
     } finally { render(); }
   });
+  $("#mp-t-fremd").onchange = () => { $("#mp-t-autor-f").classList.toggle("hidden", !$("#mp-t-fremd").checked);
+    if ($("#mp-t-fremd").checked) $("#mp-t-stil").checked = false; };
+  el.querySelectorAll("[data-fremd]").forEach((c) => (c.onchange = () => guard(async () => {
+    const autor = c.checked ? (prompt("Autor des fremden Texts (optional):", "") || "") : "";
+    await api(`${P}/texte/${c.dataset.fremd}`, { method: "PUT", body: { fremd: c.checked, autor } });
+    toast(c.checked ? "Als fremder Text markiert – keine Stilprobe, nicht im Welt-Export." : "Wieder als eigener Text markiert.", "ok"); render();
+  })));
   el.querySelectorAll("[data-stil]").forEach((c) => (c.onchange = () => guard(async () => {
     await api(`${P}/texte/${c.dataset.stil}`, { method: "PUT", body: { stil: c.checked } });
     toast(c.checked ? "Fließt ab der nächsten Auswertung ins Profil ein." : "Keine Stilprobe mehr.", "ok");
@@ -841,6 +864,210 @@ VIEWS.mensch = async (el) => {
 const bar = (status, progress, small) => `<div class="bar ${status} ${small ? "small" : ""}"><span style="width:${status === "laeuft" ? Math.max(progress, 4) : progress}%"></span></div>`;
 const fmtSec = (s) => (s == null ? "" : s < 60 ? `${s.toFixed ? s.toFixed(1) : s} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
 
+// ------------------------------------------------------------ Schreibstil (Stimmen = virtueller Autor)
+
+const ART_TEXT = { autor: "Vorbild: Autor", mensch: "Vorbild: Mensch & eigene Texte", frei: "freie Beschreibung" };
+const MESS_LABEL = { satzlaenge: "Satzlänge Ø (Wörter)", dialoganteil: "Dialoganteil", wortlaenge: "Wortlänge Ø (Buchstaben)",
+  absatzlaenge: "Absatzlänge Ø (Wörter)" };
+
+VIEWS.stil = async (el) => {
+  const data = await api("/api/stimmen");
+  const [st, o] = S.world ? await Promise.all([api(W("/stories")), api(W("/overview"))]) : [null, null];
+  const worldVoice = o ? o.meta.einstellungen.stimme || "" : "";
+  const voices = data.stimmen;
+  if (S.stimme && !voices.some((v) => v.id === S.stimme)) S.stimme = null;
+  if (!S.stimme && voices.length && !S.stimmeNeu) S.stimme = voices[0].id;
+  const uses = (v) => {
+    const parts = [];
+    if (v.id === worldVoice) parts.push("Welt-Standard");
+    const n = st ? st.geschichten.filter((g) => g.stimme_id === v.id).length : 0;
+    if (n) parts.push(`${n} Geschichte${n === 1 ? "" : "n"}`);
+    return parts.join(" · ");
+  };
+  const card = (v) => `<div class="card click pick${S.stimme === v.id && !S.stimmeNeu ? " sel" : ""}" data-voice="${v.id}">
+      <div class="row spread"><b>${esc(v.name)}</b>${uses(v) ? `<span class="chip st-fertig">${esc(uses(v))}</span>` : ""}</div>
+      <div class="small muted" style="margin-top:4px">${esc(ART_TEXT[v.art] || v.art)}${v.vorbild && v.art !== "frei" ? ` · ${esc(v.vorbild)}` : ""}</div>
+      <div class="small" style="margin-top:6px">${Object.keys(v.steckbrief || {}).length ? "✔ Steckbrief" : "○ noch kein Steckbrief"}
+        · ${v.probe && v.probe.freigegeben ? "✔ Probe freigegeben" : v.probe ? "○ Probe nicht freigegeben" : "○ keine Probe"}
+        · ${v.messwerte ? "✔ Maßstab" : "○ kein Maßstab"}</div></div>`;
+  el.innerHTML = `<div class="row spread"><h2>Schreibstil</h2>
+      <button class="primary" id="st-new">+ Neue Stimme</button></div>
+    <p class="muted">Eine <b>Stimme</b> ist der virtuelle Autor deiner Folgen – „schreibt wie Stanisław Lem“ oder „schreibt wie Ralf“
+      auf Basis deiner eigenen Texte. Planer, Autor und Lektor schreiben danach, der Prüfer prüft dagegen, die Stil-Messung
+      vergleicht mit deinen Texten oder der freigegebenen Probe. Es gilt: Folge vor Geschichte vor Welt.
+      Die Befragung im Erzählprofil liefert nur noch Publikum, Genres und Tabus.</p>
+    <div class="grid">${voices.map(card).join("") || '<div class="card empty">Noch keine Stimme – leg oben rechts die erste an.</div>'}</div>
+    ${data.archiv.length ? `<details style="margin-top:10px"><summary class="muted">Archivierte Stimmen (${data.archiv.length})</summary>
+      ${data.archiv.map((v) => `<div class="row spread card" style="margin-top:8px"><span>${esc(v.name)} <span class="small muted">archiviert ${esc(v.archiviert_am || "")}</span></span>
+        <button class="ghost" data-voice-back="${v.id}">Wiederherstellen</button></div>`).join("")}</details>` : ""}
+    <div id="st-detail" style="margin-top:22px"></div>`;
+  el.querySelectorAll("[data-voice]").forEach((c) => (c.onclick = () => { S.stimme = c.dataset.voice; S.stimmeNeu = false; render(); }));
+  el.querySelectorAll("[data-voice-back]").forEach((b) => (b.onclick = () => guard(async () => {
+    await api(`/api/stimmen/${b.dataset.voiceBack}/archiv`, { method: "POST", body: { zurueck: true } }); S.stimme = b.dataset.voiceBack; render(); })));
+  $("#st-new").onclick = () => { S.stimmeNeu = true; render(); };
+  const box = $("#st-detail");
+  if (S.stimmeNeu || !voices.length) return voiceNewForm(box, data);
+  if (S.stimme) return voiceDetail(box, data, S.stimme, st, worldVoice);
+};
+
+function voiceNewForm(box, data) {
+  const people = data.menschen || [];
+  box.innerHTML = `<div class="card stack"><h3 style="margin:0">Neue Stimme</h3>
+    <div class="row" id="vn-art">${Object.entries(data.arten).map(([k, l], i) => `<label class="row small" style="gap:6px">
+      <input type="radio" name="vn-art" value="${k}" ${i === 0 ? "checked" : ""} style="width:auto"> ${esc(l)}</label>`).join("")}</div>
+    <div class="form">
+      <div class="field" data-for="autor"><label>Autor, an dem sich die Stimme orientiert</label>
+        <input id="vn-vorbild" placeholder="z. B. Stanisław Lem, Ursula K. Le Guin, Douglas Adams"></div>
+      <div class="field hidden" data-for="mensch"><label>Mensch</label><select id="vn-mensch">
+        ${people.map((p) => `<option value="${p.id}">${esc(p.name)} (${p.texte.length} Text${p.texte.length === 1 ? "" : "e"})</option>`).join("")}</select>
+        <div id="vn-texte" class="stack small" style="margin-top:8px"></div>
+        <div class="small muted">Texte legst du unter „👤 Mensch → Texte als Basis“ an. Auszüge dienen dem Autor als Stilanker.</div></div>
+      <div class="field" data-for="frei autor mensch"><label>Beschreibung (optional, ergänzt das Vorbild)</label>
+        <textarea id="vn-beschreibung" rows="3" placeholder="z. B. knapp, trocken, viel Technik, warmherzige Figuren …"></textarea></div>
+      <div class="field"><label>Name der Stimme (optional)</label><input id="vn-name" placeholder="sonst „Wie …“"></div></div>
+    <div class="row" style="justify-content:flex-end"><button class="ghost" id="vn-cancel">Abbrechen</button>
+      <button class="ki" id="vn-create">Anlegen und Steckbrief erstellen</button></div></div>`;
+  const art = () => box.querySelector('input[name="vn-art"]:checked').value;
+  const texts = () => {
+    const p = people.find((x) => x.id === $("#vn-mensch").value);
+    $("#vn-texte").innerHTML = p && p.texte.length ? p.texte.map((t) => `<label class="row" style="gap:6px"><input type="checkbox" data-vt="${t.id}" ${t.stil ? "checked" : ""} style="width:auto">
+      ${esc(t.titel)} <span class="muted">${(t.woerter || 0).toLocaleString("de-DE")} Wörter</span></label>`).join("") : '<span class="muted">Keine Texte hinterlegt.</span>';
+  };
+  const sync = () => box.querySelectorAll("[data-for]").forEach((f) => f.classList.toggle("hidden", !f.dataset.for.split(" ").includes(art())));
+  box.querySelectorAll('input[name="vn-art"]').forEach((r) => (r.onchange = sync));
+  if ($("#vn-mensch")) { $("#vn-mensch").onchange = texts; texts(); }
+  sync();
+  $("#vn-cancel").onclick = () => { S.stimmeNeu = false; render(); };
+  $("#vn-create").onclick = () => guard(async () => {
+    const body = { art: art(), vorbild: $("#vn-vorbild").value, name: $("#vn-name").value, beschreibung: $("#vn-beschreibung").value,
+      profil_id: $("#vn-mensch") ? $("#vn-mensch").value : null,
+      texte: [...box.querySelectorAll("[data-vt]:checked")].map((x) => x.dataset.vt) };
+    $("#vn-create").disabled = true; $("#vn-create").textContent = "KI erstellt den Steckbrief …";
+    try {
+      const v = await api("/api/stimmen", { method: "POST", body });
+      S.stimme = v.id; S.stimmeNeu = false;
+      await api(`/api/stimmen/${v.id}/auswerten`, { method: "POST", body: {} }).catch((e) => toast(`Steckbrief: ${e.message}`, "bad"));
+      toast("Stimme angelegt.", "ok");
+    } finally { render(); }
+  });
+}
+
+async function voiceDetail(box, data, vid, st, worldVoice) {
+  const [v, tt] = await Promise.all([api(`/api/stimmen/${vid}`), api("/api/tts").catch(() => ({ server: [] }))]);
+  const pa = v.probe && v.probe.audio;
+  const person = (data.menschen || []).find((p) => p.id === v.profil_id);
+  const changedSince = v.probe && JSON.stringify(v.probe.regler || {}) !== JSON.stringify(v.regler || {});
+  const slider = (r) => { const val = Number((v.regler || {})[r.id] || 0);
+    return `<div class="field slider"><label>${esc(r.label)}: <b data-sl-out="${r.id}">${esc(sliderWord(r, val))}</b></label>
+      <div class="row small muted" style="gap:8px;flex-wrap:nowrap"><span>${esc(r.stufen[0])}</span>
+        <input type="range" min="-2" max="2" step="1" value="${val}" data-sl="${r.id}" style="flex:1">
+        <span>${esc(r.stufen[3])}</span></div></div>`; };
+  box.innerHTML = `<div class="stack">
+    <div class="row spread"><div><h2 style="margin-bottom:4px">${esc(v.name)}</h2>
+      <div class="small muted">${esc(ART_TEXT[v.art] || v.art)}${v.vorbild && v.art !== "frei" ? ` · ${esc(v.vorbild)}` : ""}
+        ${v.ausgewertet ? ` · Steckbrief vom ${esc(v.ausgewertet)}${v.modell ? ` (${esc(v.modell)})` : ""}` : ""}</div></div>
+      <div class="row"><button class="ki" id="vd-analyze">${Object.keys(v.steckbrief || {}).length ? "Steckbrief neu erstellen" : "Steckbrief erstellen"}</button>
+        <button class="danger" id="vd-arch">Ins Archiv</button></div></div>
+
+    <div class="card stack"><h3 style="margin:0">Basis</h3><div class="form">
+      <div class="row"><div class="field" style="flex:1"><label>Name</label><input id="vd-name" value="${esc(v.name)}"></div>
+        ${v.art === "autor" ? `<div class="field" style="flex:1"><label>Vorbild (Autor)</label><input id="vd-vorbild" value="${esc(v.vorbild)}"></div>` : ""}</div>
+      ${v.basis ? `<div class="note small">${v.basis.verborgen
+          ? `🔒 Basis aus ${esc(v.basis.quelle || "Import")}: Texte von ${esc(v.basis.owner_name || "einem anderen Autor")} – verborgen.
+             Die Stimme nutzt ${v.basis.anker_zeichen.toLocaleString("de-DE")} Zeichen Stilanker und ${v.basis.referenz_zeichen.toLocaleString("de-DE")} Zeichen Maßstab, angezeigt wird nichts davon.
+             Sichtbar wird es erst, wenn dieser Mensch per Autor-Export hierher umzieht.`
+          : `Basis aus ${esc(v.basis.quelle || "Export")}: ${v.basis.anker_zeichen.toLocaleString("de-DE")} Zeichen Stilanker, ${v.basis.referenz_zeichen.toLocaleString("de-DE")} Zeichen Maßstab.`}</div>` : ""}
+      ${v.art === "mensch" ? `<div class="field"><label>Texte von ${esc(person ? person.name : v.vorbild)} als Basis</label>
+        <div class="stack small">${person && person.texte.length ? person.texte.map((t) => `<label class="row" style="gap:6px"><input type="checkbox" data-vt="${t.id}" ${(v.texte || []).includes(t.id) ? "checked" : ""} style="width:auto">
+          ${esc(t.titel)} <span class="muted">${(t.woerter || 0).toLocaleString("de-DE")} Wörter</span></label>`).join("") : '<span class="muted">Keine Texte – unter „👤 Mensch“ hinzufügen.</span>'}</div></div>` : ""}
+      <div class="field"><label>${v.art === "frei" ? "Beschreibung der Stimme" : "Ergänzende Beschreibung"}</label>
+        <textarea id="vd-beschreibung" rows="2">${esc(v.beschreibung || "")}</textarea></div></div></div>
+
+    <div class="card stack"><h3 style="margin:0">Stil-Steckbrief</h3>
+      <p class="small muted">Von der KI aus dem Vorbild abgeleitet – alles änderbar. Genau dieser Text geht an Planer, Autor, Lektor und Prüfer.</p>
+      <form class="form" id="vd-brief">${data.felder.map((f) => `<div class="field"><label>${esc(f.label)}</label>
+        <textarea name="${f.id}" style="min-height:48px">${esc((v.steckbrief || {})[f.id] || "")}</textarea></div>`).join("")}</form></div>
+
+    <div class="card stack"><h3 style="margin:0">Justieren</h3>
+      <p class="small muted">Mitte = wie das Vorbild. Danach eine neue Probe schreiben lassen und vergleichen.</p>
+      <div class="sliders">${data.regler.map(slider).join("")}</div>
+      <div class="field"><label>Hinweise an die Stimme (verbindlich)</label>
+        <textarea id="vd-hinweise" rows="2" placeholder="z. B. keine Anglizismen, Technik nie erklären, Figuren duzen sich">${esc(v.hinweise || "")}</textarea></div>
+      <div class="row" style="justify-content:flex-end"><button class="primary" id="vd-save">Speichern</button></div></div>
+
+    <div class="card stack"><div class="row spread"><h3 style="margin:0">Probe</h3>
+      <div class="row"><input id="vd-pw" type="number" min="80" max="600" step="20" value="220" style="width:90px"><span class="small muted">Wörter</span>
+        <button class="ki" id="vd-probe">${v.probe ? "Neue Probe schreiben" : "Probe schreiben"}</button></div></div>
+      <p class="small muted">Eine kurze Szene in ${S.world ? `der Welt „${esc(S.world)}“` : "einer neutralen Welt"} – so klingt die Stimme mit Steckbrief und Reglern.
+        Die freigegebene Probe wird zum Stilanker für den Autor${v.art === "mensch" ? "" : " und zum messbaren Maßstab"}.</p>
+      ${v.probe ? `<div class="small">${v.probe.freigegeben ? `<span class="chip st-fertig">freigegeben ${esc(v.probe.freigegeben_am || "")}</span>` : '<span class="chip st-offen">nicht freigegeben</span>'}
+          · ${esc(v.probe.am)} · ${esc(v.probe.modell || "")}${changedSince ? ' · <span class="warn-text">Regler seit der Probe geändert – neue Probe empfohlen</span>' : ""}</div>
+        <pre class="live probe">${esc(v.probe.text)}</pre>
+        <div class="row">${tt.server.length ? `<select id="vd-tts" title="Vorlese-Stimme (eine Stimme für alles)">${voiceOptions(tt, (pa && pa.ref) || "", S.world ? "Erzähler-Stimme der Welt" : "— Stimme wählen —")}</select>
+          <button class="ki" id="vd-audio">🎙 Als Hörbuch vorlesen</button>
+          ${v.probe_audio_aktuell ? `<audio controls preload="none" src="/api/stimmen/${v.id}/probe.wav?t=${encodeURIComponent(pa.am)}" style="height:36px"></audio>
+            <a class="small" href="/api/stimmen/${v.id}/probe.wav?download=1">WAV</a>
+            <span class="small muted">${esc(pa.server || "")} · ${esc(pa.stimme_name || pa.stimme || "")}</span>` : ""}`
+          : '<span class="small muted">Zum Vorlesen erst unter Einstellungen → TTS-Server einen Server einrichten.</span>'}</div>
+        <div class="row" style="justify-content:flex-end">${v.probe.freigegeben ? '<button class="ghost" id="vd-unok">Freigabe zurücknehmen</button>'
+          : '<button class="primary" id="vd-ok">Passt – als Maßstab freigeben</button>'}</div>` : ""}</div>
+
+    <div class="card stack"><h3 style="margin:0">Maßstab – woran sich alle abgleichen</h3>
+      ${v.messwerte ? `<dl class="kv">${Object.entries(MESS_LABEL).map(([k, l]) => `<dt>${esc(l)}</dt><dd>${esc(v.messwerte[k] ?? "–")}</dd>`).join("")}
+        <dt>Quelle</dt><dd>${esc(v.messwerte.quelle || "")}</dd></dl>`
+        : `<p class="small muted">Noch kein messbarer Maßstab – ${v.art === "mensch" ? "Texte als Basis wählen" : "eine Probe freigeben"}. Bis dahin vergleicht die Stil-Messung mit den letzten Folgen.</p>`}
+      <details ${S.expert ? "open" : ""}><summary class="small">So bekommen es Planer, Autor und Lektor</summary><pre class="live qa-pre">${esc(v.schreib_block)}</pre></details>
+      <details ${S.expert ? "open" : ""}><summary class="small">So prüft der Prüfer</summary><pre class="live qa-pre">${esc(v.pruef_block)}</pre></details></div>
+
+    ${S.world && st ? `<div class="card stack"><h3 style="margin:0">Verwendung in „${esc(S.world)}“</h3>
+      <div class="row spread"><span>Welt-Standard ${worldVoice === v.id ? '<span class="chip st-fertig">diese Stimme</span>' : ""}</span>
+        ${worldVoice === v.id ? '<button class="ghost" id="vd-world-off">Nicht mehr Standard</button>' : '<button class="ghost" id="vd-world-on">Als Welt-Standard setzen</button>'}</div>
+      ${st.geschichten.length ? `<table class="qtable"><tr><th>Geschichte</th><th>Stimme</th></tr>${st.geschichten.map((g) => `<tr><td>${esc(g.title || `Strang ${g.id}`)}</td>
+        <td><select data-story-voice="${g.id}"><option value="">wie Welt</option>${data.stimmen.map((x) => `<option value="${x.id}" ${g.stimme_id === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></td></tr>`).join("")}</table>`
+        : '<p class="small muted">Noch keine Geschichten in dieser Welt.</p>'}
+      <p class="small muted">Beim Erzeugen einer Folge kannst du die Stimme auch nur für diese Folge wählen; eine neue Geschichte behält sie dann.</p></div>` : ""}
+  </div>`;
+  const P = `/api/stimmen/${vid}`;
+  box.querySelectorAll("[data-sl]").forEach((r) => (r.oninput = () => {
+    const spec = data.regler.find((x) => x.id === r.dataset.sl);
+    box.querySelector(`[data-sl-out="${r.dataset.sl}"]`).textContent = sliderWord(spec, Number(r.value));
+  }));
+  const collect = () => ({ name: $("#vd-name").value, vorbild: $("#vd-vorbild") ? $("#vd-vorbild").value : undefined,
+    beschreibung: $("#vd-beschreibung").value, hinweise: $("#vd-hinweise").value,
+    steckbrief: Object.fromEntries(new FormData($("#vd-brief")).entries()),
+    regler: Object.fromEntries([...box.querySelectorAll("[data-sl]")].map((r) => [r.dataset.sl, Number(r.value)])),
+    ...(v.art === "mensch" ? { texte: [...box.querySelectorAll("[data-vt]:checked")].map((x) => x.dataset.vt) } : {}) });
+  const save = () => api(P, { method: "PUT", body: collect() });
+  $("#vd-save").onclick = () => guard(async () => { await save(); toast("Stimme gespeichert.", "ok"); render(); });
+  $("#vd-analyze").onclick = () => guard(async () => {
+    if (Object.keys(v.steckbrief || {}).length && !confirm("Steckbrief neu erstellen? Deine Änderungen am Steckbrief werden überschrieben (Regler und Hinweise bleiben).")) return;
+    $("#vd-analyze").disabled = true; $("#vd-analyze").textContent = "KI arbeitet …";
+    try { await save(); await api(`${P}/auswerten`, { method: "POST", body: {} }); toast("Steckbrief erstellt.", "ok"); } finally { render(); }
+  });
+  $("#vd-probe").onclick = () => guard(async () => {
+    $("#vd-probe").disabled = true; $("#vd-probe").textContent = "Stimme schreibt …";
+    try { await save(); await api(`${P}/probe`, { method: "POST", body: { welt: S.world || null, woerter: Number($("#vd-pw").value) } }); } finally { render(); }
+  });
+  if ($("#vd-audio")) $("#vd-audio").onclick = () => guard(async () => {
+    $("#vd-audio").disabled = true; $("#vd-audio").textContent = "TTS spricht …";
+    try { await api(`${P}/probe/audio`, { method: "POST", body: { stimme: $("#vd-tts").value || null, welt: S.world || null } });
+      toast("Probe vertont.", "ok"); } finally { render(); }
+  });
+  if ($("#vd-ok")) $("#vd-ok").onclick = () => guard(async () => { await api(`${P}/probe/freigeben`, { method: "POST", body: { ok: true } }); toast("Probe ist jetzt Maßstab.", "ok"); render(); });
+  if ($("#vd-unok")) $("#vd-unok").onclick = () => guard(async () => { await api(`${P}/probe/freigeben`, { method: "POST", body: { ok: false } }); render(); });
+  $("#vd-arch").onclick = () => confirm(`„${v.name}“ ins Archiv legen?`) && guard(async () => { await api(`${P}/archiv`, { method: "POST", body: {} }); S.stimme = null; render(); });
+  if ($("#vd-world-on")) $("#vd-world-on").onclick = () => guard(async () => { await api(W("/settings"), { method: "POST", body: { stimme: vid } }); toast("Welt-Standard gesetzt.", "ok"); render(); });
+  if ($("#vd-world-off")) $("#vd-world-off").onclick = () => guard(async () => { await api(W("/settings"), { method: "POST", body: { stimme: "" } }); render(); });
+  box.querySelectorAll("[data-story-voice]").forEach((s) => (s.onchange = () => guard(async () => {
+    await api(W(`/stories/${s.dataset.storyVoice}/stimme`), { method: "PUT", body: { stimme_id: s.value || null } }); toast("Gespeichert.", "ok");
+  })));
+}
+
+function sliderWord(spec, val) {
+  if (!val) return "wie das Vorbild";
+  return spec.stufen[{ "-2": 0, "-1": 1, "1": 2, "2": 3 }[String(val)]];
+}
+
 VIEWS.laeufe = async (el) => {
   if (S.runId) return runDetail(el, S.runId);
   const { laeufe } = await api(W("/runs"));
@@ -870,6 +1097,7 @@ async function runDetail(el, id) {
     <div class="card stack"><div class="row spread"><span id="r-phase">${esc(r.status === "laeuft" ? r.phase || "" : r.status === "fertig" ? "Abgeschlossen" : r.error || r.status)}</span>
       <span class="small muted" id="r-meta">${esc(r.model || "")} · Start ${esc(r.started_at)} UTC${r.duration ? " · " + fmtSec(r.duration) : ""}</span></div>
       <div id="r-bar">${bar(r.status, r.progress)}</div></div>
+    <div class="card stack" id="r-trace">${traceHtml(r.nachvollzug, r.status)}</div>
     <div class="card stack"><h3>Auftrag (Frage an die KI)</h3><pre class="code">${esc(r.auftrag || "")}</pre></div>
     <div class="card stack"><h3>Weg</h3><div id="r-steps">${stepsHtml(r.steps)}</div></div>
     <div class="card stack" id="r-result">${resultHtml(r, v)}</div>
@@ -889,14 +1117,115 @@ async function runDetail(el, id) {
   $("#r-back").onclick = () => { S.runId = null; render(); };
   el.querySelectorAll("[data-cmp]").forEach((b) => (b.onclick = () => compareDialog(r.aufrufe.find((c) => String(c.id) === b.dataset.cmp))));
   bindResult();
+  bindTrace();
   if (r.status === "laeuft") scheduleRefresh(() => liveUpdate(id));
+}
+
+// ------------------------------------------------------------ Nachvollzug eines Laufs
+
+const OUTCOME = { ok: ["✔", "weitergeleitet"], eingriff: ["✋", "eingegriffen"], warnung: ["⚠", "Warnung"],
+  mensch: ["👤", "bei dir"], fehler: ["✖", "Fehler"], info: ["•", "Info"] };
+const ART_LABEL = { gewichtung: "Gewichtung", frage: "Antwort der KI", bewertung: "Bewertung", pruefung: "Prüfung",
+  eingriff: "Eingriff", weiterleitung: "Weiterleitung", korrektur: "Korrekturrunde", ersatzmodell: "Ersatzmodell",
+  entscheidung: "Entscheidung", warnung: "Warnung", fehler: "Fehler" };
+const KEY_LABEL = { ziel_woerter: "Ziel (Wörter)", woerter: "Wörter", laenge_quote: "Länge / Ziel", kanonpassung: "Kanonpassung",
+  ueberraschung: "Überraschung", widersprueche: "Widersprüche", begruendung: "Begründung", schwere_original: "Schwere vorher",
+  geaendert_anteil: "Text geändert", im_text_erkennbar: "Im Text erkennbar", woerter_vorher: "Wörter vorher",
+  woerter_nachher: "Wörter nachher", wendung_geschuetzt: "Wendung geschützt", min_kanon: "Mindest-Kanon",
+  erzaehlprofil: "Erzählprofil", altersfreigabe: "Altersfreigabe", nur_warnung: "Nur Warnung", rueckfragen: "Rückfragen",
+  uebersprungen: "übersprungen", ergaenzt: "ergänzt", raetsel: "Rätsel", ende_uebergabe: "Ende-Übergabe" };
+const traceOpen = new Set();
+const keyLabel = (k) => KEY_LABEL[k] || String(k).replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+
+function kvHtml(v, depth = 0) {
+  if (v == null || v === "") return '<span class="muted">–</span>';
+  if (typeof v === "boolean") return v ? "ja" : "nein";
+  if (typeof v === "number") return esc(Number.isInteger(v) ? v : Math.round(v * 1000) / 1000);
+  if (typeof v === "string") return v.length > 160 ? `<div class="kv-long">${esc(v)}</div>` : esc(v);
+  if (depth > 3) return `<code>${esc(JSON.stringify(v))}</code>`;
+  if (Array.isArray(v)) {
+    if (!v.length) return '<span class="muted">keine</span>';
+    if (v.every((x) => x == null || typeof x !== "object")) return v.map((x) => esc(x)).join(" · ");
+    return `<ol class="kv-list">${v.map((x) => `<li>${kvHtml(x, depth + 1)}</li>`).join("")}</ol>`;
+  }
+  return `<dl class="kv">${Object.entries(v).map(([k, x]) => `<dt>${esc(keyLabel(k))}</dt><dd>${kvHtml(x, depth + 1)}</dd>`).join("")}</dl>`;
+}
+
+function eventHtml(e) {
+  const [icon, word] = OUTCOME[e.ausgang] || OUTCOME.info;
+  const hasData = (e.eingaben != null && e.eingaben !== "") || (e.ergebnis != null && e.ergebnis !== "");
+  return `<li class="ev o-${esc(e.ausgang)}"><span class="ev-i" title="${esc(word)}">${icon}</span><div class="ev-b">
+    <div class="ev-t">${esc(e.titel)} <span class="ev-a">${(ART_LABEL[e.art] || e.art) === word ? "" : esc(ART_LABEL[e.art] || e.art) + " · "}${esc(word)}${e.sekunden != null ? ` · +${esc(e.sekunden)} s` : ""}</span></div>
+    ${e.regel ? `<div class="ev-r">Regel: ${esc(e.regel)}</div>` : ""}
+    ${e.verborgen ? '<div class="ev-r">🔒 Werte können Geheimnisse enthalten – sichtbar mit „Backstage“.</div>' : ""}
+    ${hasData ? `<details class="ev-d" ${S.expert ? "open" : ""}><summary>Werte</summary>
+      ${e.eingaben != null ? `<div class="ev-h">Eingaben</div>${kvHtml(e.eingaben)}` : ""}
+      ${e.ergebnis != null ? `<div class="ev-h">Ergebnis</div>${kvHtml(e.ergebnis)}` : ""}</details>` : ""}
+    ${e.call_id && S.reveal ? `<button class="ghost small" data-qa="${e.call_id}">Frage &amp; Antwort ansehen</button><div class="qa" id="qa-ev-${e.call_id}-${esc(e.id ?? "")}"></div>` : ""}
+  </div></li>`;
+}
+
+function traceHtml(t, status) {
+  if (!t) return "<h3>Nachvollzug</h3><div class='muted'>Keine Daten.</div>";
+  if (t.modus === "fehler") return `<h3>Nachvollzug</h3><div class="err">${esc(t.fehler || "")}</div>`;
+  const sums = t.summen || {};
+  const chips = ["ok", "eingriff", "warnung", "mensch", "fehler"].filter((k) => sums[k])
+    .map((k) => `<span class="oc o-${k}">${OUTCOME[k][0]} ${sums[k]} ${OUTCOME[k][1]}</span>`).join("");
+  const strip = t.phasen.map((p, i) => `${i ? '<span class="ps-arrow">→</span>' : ""}<button class="ps o-${esc(p.status)}${status === "laeuft" && i === t.phasen.length - 1 ? " ps-live" : ""}" data-ph="${esc(p.id)}" title="${esc((OUTCOME[p.status] || OUTCOME.info)[1])}">${(OUTCOME[p.status] || OUTCOME.info)[0]} ${esc(p.label)}</button>`).join("");
+  const phases = t.phasen.map((p, i) => {
+    const auto = ["eingriff", "mensch", "fehler"].includes(p.status) || (status === "laeuft" && i === t.phasen.length - 1);
+    const open = traceOpen.has(p.id) || (!traceOpen.has("!" + p.id) && (S.expert || auto));
+    const calls = p.aufrufe.length ? `<table class="qtable tr-calls"><tr><th>KI-Aufruf</th><th>Modell</th><th>Frage</th><th>Antwort</th><th>Dauer</th><th></th></tr>
+      ${p.aufrufe.map((c) => `<tr><td>${esc(c.step || c.task)}${c.ok ? "" : ` <span class="chip st-fehler" title="${esc(c.error || "")}">Fehler</span>`}${c.wiederholung ? ' <span class="chip st-offen">Wiederholung</span>' : ""}</td>
+        <td class="small">${esc(c.model || "")}</td><td class="small">${fmtVal("", c.prompt_chars)} Z.</td><td class="small">${fmtVal("", c.response_chars)} Z.</td>
+        <td class="small">${c.seconds != null ? fmtSec(c.seconds) : ""}</td>
+        <td>${S.reveal ? `<button class="ghost small" data-qa="${c.id}">Frage &amp; Antwort</button>` : ""}</td></tr>
+        <tr class="qa-row"><td colspan="6"><div class="qa" id="qa-call-${c.id}"></div></td></tr>`).join("")}</table>` : "";
+    return `<details class="phase o-${esc(p.status)}" data-phase="${esc(p.id)}" ${open ? "open" : ""}>
+      <summary><span class="ph-i">${(OUTCOME[p.status] || OUTCOME.info)[0]}</span> ${esc(p.label)}
+        <span class="small muted">${p.ereignisse.length} ${p.ereignisse.length === 1 ? "Schritt" : "Schritte"}${p.aufrufe.length ? ` · ${p.aufrufe.length} ${p.aufrufe.length === 1 ? "KI-Aufruf" : "KI-Aufrufe"}` : ""}</span></summary>
+      ${p.ereignisse.length ? `<ul class="evs">${p.ereignisse.map(eventHtml).join("")}</ul>` : ""}${calls}</details>`;
+  }).join("");
+  const ch = t.aenderungen || {};
+  const changes = ch.anzahl ? `<div class="small">Änderungen an der Welt aus diesem Lauf: ${Object.entries(ch.sichtbar || {}).map(([k, n]) => `${esc(k)} ×${n}`).join(" · ")}${ch.verborgen ? ` · 🔒 ${ch.verborgen} Backstage` : ""}</div>` : "";
+  return `<div class="row spread"><h3 style="margin:0">Nachvollzug – wie diese ${status === "laeuft" ? "Folge gerade entsteht" : "Ausgabe entstanden ist"}</h3><div class="ocs">${chips}</div></div>
+    ${t.modus === "rekonstruiert" ? `<div class="small muted">Aus den vorhandenen Daten zusammengesetzt (Lauf von vor dem Entscheidungsprotokoll).${(t.fehlt || []).length ? ` Nicht erfasst: ${t.fehlt.map(esc).join(" · ")}.` : ""}</div>` : ""}
+    ${t.modus === "leer" ? '<div class="muted small">Für diesen Lauf gibt es keine Entscheidungen zum Nachvollziehen.</div>' : ""}
+    <div class="pstrip">${strip}</div>${phases}${changes}
+    ${S.reveal ? "" : '<div class="small muted">🔒 Fragen an die KI, Antworten und manche Werte sind nur mit „Backstage“ sichtbar.</div>'}`;
+}
+
+function bindTrace() {
+  const box = $("#r-trace");
+  if (!box) return;
+  box.querySelectorAll("details.phase").forEach((d) => d.addEventListener("toggle", () => {
+    const id = d.dataset.phase;
+    traceOpen.delete(id); traceOpen.delete("!" + id);
+    traceOpen.add(d.open ? id : "!" + id);
+  }));
+  box.querySelectorAll("[data-ph]").forEach((b) => (b.onclick = () => {
+    const d = box.querySelector(`details.phase[data-phase="${b.dataset.ph}"]`);
+    if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); }
+  }));
+  box.querySelectorAll("[data-qa]").forEach((b) => (b.onclick = async () => {
+    const target = b.nextElementSibling && b.nextElementSibling.classList.contains("qa") ? b.nextElementSibling : $(`#qa-call-${b.dataset.qa}`);
+    if (!target) return;
+    if (target.innerHTML) { target.innerHTML = ""; return; }
+    target.innerHTML = '<div class="muted small">Lade …</div>';
+    try {
+      const c = await api(W(`/aufrufe/${b.dataset.qa}`));
+      target.innerHTML = `<div class="small muted">${esc(c.model || "")} · ${esc(c.step || c.task || "")}${c.error ? ` · <span class="err">${esc(c.error)}</span>` : ""}</div>
+        ${(c.nachrichten || []).map((m) => `<div class="ev-h">${m.role === "system" ? "Rolle & Regeln (System)" : m.role === "user" ? "Frage (Kontext + Aufgabe)" : "Vorige Antwort"} · ${fmtVal("", m.zeichen)} Zeichen${m.gekuerzt ? " · Mitte gekürzt" : ""}</div><pre class="live qa-pre">${esc(m.content)}</pre>`).join("")}
+        <div class="ev-h">Antwort der KI</div><pre class="live qa-pre">${esc(c.response || "(keine)")}</pre>`;
+    } catch (err) { target.innerHTML = `<div class="err">${esc(err.message || err)}</div>`; }
+  }));
 }
 
 function resultHtml(r, v) {
   if (r.status === "laeuft") return `<h3>Ergebnis</h3><div class="muted">Läuft noch …</div>`;
   if (r.status === "fehler" || r.status === "abgebrochen")
     return `<h3>Ergebnis</h3><div class="err">${esc(r.error || "Lauf wurde abgebrochen (Server beendet).")}</div>`;
-  if (r.folge) return `<h3>Ergebnis</h3><div class="summary">Folge ${r.folge.release_nr}: „${esc(r.folge.title || "")}“</div>
+  if (r.folge) return `<h3>Ergebnis</h3><div class="summary">${r.folge.form === "geschichte" ? "Eigenständige Geschichte" : `Folge ${r.folge.release_nr}`}: „${esc(r.folge.title || "")}“</div>
     <div class="row"><span class="small">${r.folge.word_count || 0} Wörter ≈ ${Math.round((r.folge.word_count || 0) / 135)} Minuten</span>
     <button class="primary" data-goto-ep="${r.folge.id}">Folge lesen / hören</button></div>`;
   if (!v) return `<h3>Ergebnis</h3><div class="muted">Kein Vorschlag.</div>`;
@@ -917,6 +1246,8 @@ async function liveUpdate(id) {
   $("#r-bar").innerHTML = bar(r.status, r.progress);
   $("#r-phase").textContent = r.status === "laeuft" ? r.phase || "" : r.status === "fertig" ? "Abgeschlossen" : r.error || r.status;
   $("#r-steps").innerHTML = stepsHtml(r.steps);
+  const reading = [...document.querySelectorAll("#r-trace .qa")].some((q) => q.innerHTML.trim());
+  if ($("#r-trace") && !reading) { $("#r-trace").innerHTML = traceHtml(r.nachvollzug, r.status); bindTrace(); }
   const live = $("#r-live");
   if (live) {
     const atBottom = live.scrollTop + live.clientHeight >= live.scrollHeight - 30;
@@ -1800,8 +2131,57 @@ SUB.schnittstellen = async (el) => {
 };
 
 SUB.sicherung = async (el) => {
-  if (!S.world) { el.innerHTML = '<div class="card empty">Erst eine Welt anlegen.</div>'; return; }
-  el.innerHTML = `<h2>Sicherung</h2><div class="card stack">
+  const ex = await api("/api/exporte");
+  const sizeTxt = (b) => (b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`);
+  el.innerHTML = `<h2>Export &amp; Umzug</h2><div class="card stack">
+    <p class="small muted">Für einen anderen Rechner. <b>Welt</b>: Kanon, Folgen, Nachvollzug und jede Stimme, die die Welt nutzt
+      (Steckbrief, Regler, Hinweise, Probe, Maßstab). Bei Stimmen „wie ein Mensch“ gehen statt der ganzen Texte nur Stilanker und
+      Maßstab-Auszug mit; eingelesene Texte, die schon im Kanon stecken, ohne Inhalt. <b>Autor</b>: Erzählprofile, eigene Texte
+      vollständig, alle Stimmen. <b>Alles</b>: Autor plus alle Welten.<br>
+      Beim Import prüft Story World die Profil-ID: Ist der Mensch auf dem Rechner bekannt, sind seine Texte sichtbar – sonst liegen sie
+      verborgen und werden trotzdem genutzt. Erst den Autor importieren, dann die Welten. Exporte enthalten Backstage-Geheimnisse.</p>
+    <div class="row spread">${S.world ? `<span>Welt „${esc(S.world)}“</span><span class="row"><label class="small row" style="gap:6px"><input type="checkbox" id="x-audio-w" style="width:auto"> mit Hörbüchern</label>
+      <button class="ghost" data-export="welt">Welt exportieren</button></span>` : '<span class="muted small">Keine Welt gewählt.</span>'}</div>
+    <div class="row spread"><span>Autor (Profile, Texte, Stimmen)</span><button class="ghost" data-export="autor">Autor exportieren</button></div>
+    <div class="row spread"><span>Alles</span><span class="row"><label class="small row" style="gap:6px"><input type="checkbox" id="x-audio-a" style="width:auto"> mit Hörbüchern</label>
+      <button class="ghost" data-export="alles">Alles exportieren</button></span></div>
+    <div class="row spread" style="border-top:1px solid var(--line);padding-top:12px"><span>Importieren <span class="small muted">(Export-Datei .zip)</span></span>
+      <span class="row"><input type="file" id="x-file" accept=".zip" style="width:auto"><button class="primary" id="x-import">Importieren</button></span></div>
+    <div id="x-report"></div>
+    <details ${ex.exporte.length ? "open" : ""}><summary class="small">Exporte in ${esc(ex.ordner)} (${ex.exporte.length})</summary>
+      ${ex.exporte.length ? `<table>${ex.exporte.map((x) => `<tr><td class="small">${esc(x.datei)}</td><td class="small muted">${esc(x.zeit)}</td>
+        <td class="small muted">${sizeTxt(x.groesse)}</td><td><a class="small" href="/api/exporte/${encodeURIComponent(x.datei)}">Herunterladen</a></td></tr>`).join("")}</table>` : '<div class="small muted">Noch keine Exporte.</div>'}</details></div>
+    <div id="s-sicherung"></div>`;
+  el.querySelectorAll("[data-export]").forEach((b) => (b.onclick = () => guard(async () => {
+    const typ = b.dataset.export;
+    b.disabled = true; const label = b.textContent; b.textContent = "Exportiere …";
+    try {
+      const r = await api("/api/export", { method: "POST", body: { typ, welt: S.world,
+        audio: typ === "welt" ? $("#x-audio-w").checked : typ === "alles" ? $("#x-audio-a").checked : false } });
+      toast(`Export fertig: ${r.datei}`, "ok");
+      const a = document.createElement("a"); a.href = `/api/exporte/${encodeURIComponent(r.datei)}`; a.click();
+    } finally { b.disabled = false; b.textContent = label; render(); }
+  })));
+  $("#x-import").onclick = () => guard(async () => {
+    const f = $("#x-file").files[0];
+    if (!f) throw new Error("Bitte eine Export-Datei wählen.");
+    $("#x-import").disabled = true; $("#x-import").textContent = "Importiere …";
+    try {
+      const res = await fetch("/api/import", { method: "POST", headers: { "X-Story-World": "1", "Content-Type": "application/zip" }, body: f });
+      const r = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(r.fehler || `Fehler ${res.status}`);
+      const lines = [];
+      if (r.autor) lines.push(`Autor: ${r.autor.profile_neu.length} neue Profile${r.autor.profile_vorhanden.length ? `, ${r.autor.profile_vorhanden.length} vorhanden` : ""}, ${r.autor.texte_neu} Texte,
+        Stimmen ${Object.entries(r.autor.stimmen).map(([k, n]) => `${n} ${k}`).join(", ") || "–"}${r.autor.freigeschaltet ? `, ${r.autor.freigeschaltet} vorher Verborgenes jetzt sichtbar` : ""}`);
+      for (const w of r.welten) lines.push(`Welt „${w.name || w.slug}“ → ${w.slug}: Stimmen ${Object.entries(w.stimmen).map(([k, n]) => `${n} ${k}`).join(", ") || "–"}${w.verborgen ? `, ${w.verborgen} Text-Abschnitte verborgen (anderer Autor)` : ""}${w.audio ? `, ${w.audio} Audiodateien` : ""}`);
+      $("#x-report").innerHTML = `<div class="note small">${lines.map(esc).join("<br>")}</div>`;
+      toast("Import fertig.", "ok");
+      if (r.welten.length) { await loadWorlds(r.welten[0].slug); }
+    } finally { $("#x-import").disabled = false; $("#x-import").textContent = "Importieren"; }
+  });
+  const inner = $("#s-sicherung");
+  if (!S.world) return;
+  inner.innerHTML = `<h2 style="margin-top:22px">Sicherung</h2><div class="card stack">
     <p class="muted small">Legt eine konsistente Kopie der aktuellen Welt unter welten/backups/ an. Vor jeder Schemaänderung passiert das automatisch.
       Sicherungen enthalten Backstage-Geheimnisse – nicht weitergeben.</p>
     <div class="row"><button class="ghost" id="s-backup">Sicherung jetzt anlegen</button><span id="s-bres" class="small muted"></span></div></div>`;
@@ -1812,6 +2192,7 @@ SUB.sicherung = async (el) => {
   const box = document.createElement("div");
   box.className = "card stack";
   box.style.marginTop = "14px";
+  el = inner;
   box.innerHTML = `<h3 style="margin:0">Wiederherstellen</h3>
     <p class="small muted">Eine Sicherung wird als <b>neue</b> Welt wiederhergestellt – deine aktuelle Welt und die Sicherung bleiben unverändert.</p>
     ${sicherungen.length ? `<table>${sicherungen.map((b) => `<tr><td class="small">${esc(b.datei)}</td><td class="small muted">${esc(b.zeit)}</td>

@@ -235,7 +235,8 @@ def _text_file(pid: str, tid: str) -> Path:
     return text_dir(pid) / f"{tid}.txt"
 
 
-def add_text(pid: str, titel: str, text: str, quelle: str = "", stil: bool = True) -> dict:
+def add_text(pid: str, titel: str, text: str, quelle: str = "", stil: bool = True, fremd: bool = False,
+             autor: str = "") -> dict:
     text = (text or "").replace("\r\n", "\n").strip()
     if not text:
         raise ProfileError("Der Text ist leer.")
@@ -249,7 +250,8 @@ def add_text(pid: str, titel: str, text: str, quelle: str = "", stil: bool = Tru
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(text)
     meta = {"id": tid, "titel": (titel or "").strip()[:120] or text.splitlines()[0][:80], "quelle": (quelle or "")[:200],
-            "zeichen": len(text), "woerter": len(text.split()), "erstellt": _now(), "stil": bool(stil), "eingelesen": []}
+            "zeichen": len(text), "woerter": len(text.split()), "erstellt": _now(), "stil": bool(stil) and not fremd,
+            "fremd": bool(fremd), "autor": (autor or "").strip()[:120], "eingelesen": []}
     _update(pid, lambda p: p.setdefault("texte", []).append(meta))
     return meta
 
@@ -267,8 +269,14 @@ def update_text(pid: str, tid: str, changes: dict) -> dict:
             if t["id"] == tid:
                 if isinstance(changes.get("titel"), str) and changes["titel"].strip():
                     t["titel"] = changes["titel"].strip()[:120]
+                if "fremd" in changes:
+                    t["fremd"] = bool(changes["fremd"])
+                if isinstance(changes.get("autor"), str):
+                    t["autor"] = changes["autor"].strip()[:120]
                 if "stil" in changes:
                     t["stil"] = bool(changes["stil"])
+                if t.get("fremd"):
+                    t["stil"] = False  # fremder Text ist nie Stilprobe dieses Menschen
                 return
         raise LookupError("Text nicht gefunden.")
     return _update(pid, apply)
@@ -330,7 +338,7 @@ def split_text(text: str, size: int = 12000) -> list:
 
 def style_samples(p: dict, budget: int = 12000) -> str:
     """Auszüge aus den als Stilprobe markierten Texten (Anfang und Mitte), zusammen höchstens `budget` Zeichen."""
-    texts = [t for t in p.get("texte", []) if t.get("stil")]
+    texts = [t for t in p.get("texte", []) if t.get("stil") and not t.get("fremd")]
     if not texts:
         return ""
     share = max(1500, budget // len(texts))
@@ -393,3 +401,17 @@ def style_block(profile: dict | None) -> str:
     return (f"ERZÄHLPROFIL von {profile.get('name', 'dem Nutzer')} – die Geschichte soll klingen, als hätte "
             "dieser Mensch sie selbst geschrieben (Stimme, Rhythmus, Humor, Motive), ohne die Weltregeln zu verletzen:\n"
             + "\n".join(lines))
+
+
+def audience_block(profile: dict | None) -> str:
+    """Nur Publikum, Genres und Tabus – wenn eine Stimme den Stil vorgibt, liefert das Profil nicht mehr den Stil."""
+    if not profile:
+        return ""
+    prof, answers = profile.get("profil") or {}, profile.get("antworten") or {}
+    items = [("Für wen", prof.get("publikum") or answers.get("fuer_wen")),
+             ("Genres: mag / mag nicht", prof.get("genres") or answers.get("genres")),
+             ("Tabus", prof.get("tabus") or answers.get("tabus"))]
+    lines = [f"- {label}: {value}" for label, value in items if value]
+    if not lines:
+        return ""
+    return f"PUBLIKUM laut Erzählprofil von {profile.get('name', 'dem Nutzer')} (Stil kommt von der Stimme):\n" + "\n".join(lines)

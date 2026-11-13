@@ -17,6 +17,14 @@ story_world.profiles.tmp
 story_world.profiles.defekt-*.json
 profile_texte/
 
+# Exporte für den Umzug (enthalten Backstage-Geheimnisse und Texte) – nur lokal
+exporte/
+
+# Stimmen (virtuelle Autoren, Proben) – nur lokal
+story_world.stimmen.json
+story_world.stimmen.tmp
+story_world.stimmen.defekt-*.json
+
 # System- und Arbeitsdateien
 .DS_Store
 Thumbs.db
@@ -34,3 +42,6 @@ unsloth-tmp/
 /ki-aufrufschleife.*
 /systemuebersicht.*
 /user-journey.*
+
+# Gedächtnis-Exporte (Arbeitsnotizen) – nur lokal
+/_gedaechtnis/

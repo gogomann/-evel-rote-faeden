@@ -359,6 +359,8 @@ SETTINGS = {
     "min_kanon": "6",
     "ziel_ueberraschung": "",
     "szenario_wahl": "automatisch",
+    # Stimme (virtueller Autor, id aus story_world.stimmen.json), die gilt, wenn Folge und Geschichte keine vorgeben
+    "stimme": "",
 }
 BOOL_SETTINGS = {"auto_uebernehmen", "auto_folge"}
 INT_SETTINGS = {"folge_woerter": (500, 20000, "Folgenlänge"), "nachrichten_pro_tag": (0, 10, "Nachrichten pro Tag"),
@@ -399,6 +401,16 @@ def _title(table: str, row: dict) -> str:
 
 def audit(conn: sqlite3.Connection, actor: str, action: str, table: str | None = None,
           row_id: int | None = None, detail: str | None = None, backstage: bool = False) -> None:
+    from . import runs  # Lauf-Bezug: welche Änderung kam aus welchem KI-Lauf (Nachvollzug)
+    run_id = runs.current_id()
+    if run_id is not None:
+        try:
+            conn.execute(
+                "INSERT INTO audit_log (actor, action, table_name, row_id, backstage, detail, run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)", (actor, action, table, row_id, 1 if backstage else 0, detail, run_id))
+            return
+        except sqlite3.OperationalError:
+            pass  # ältere Datenbank ohne Spalte run_id
     conn.execute(
         "INSERT INTO audit_log (actor, action, table_name, row_id, backstage, detail) VALUES (?, ?, ?, ?, ?, ?)",
         (actor, action, table, row_id, 1 if backstage else 0, detail),
@@ -1171,6 +1183,11 @@ def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
         value = str(value or "").strip()
         if value and not (value.isdigit() and conn.execute("SELECT 1 FROM genres WHERE id = ?", (int(value),)).fetchone()):
             raise ValidationError("Unbekanntes Genre.")
+    elif key == "stimme":
+        from . import stimmen
+        value = str(value or "").strip()
+        if value and not stimmen.get(value):
+            raise ValidationError("Unbekannte Stimme.")
     elif key == "auto_uhrzeit":
         if not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", str(value or "")):
             raise ValidationError("Uhrzeit bitte als HH:MM, z. B. 20:30.")

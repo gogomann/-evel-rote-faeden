@@ -67,6 +67,32 @@ SQLite ersetzt PostgreSQL auf Wunsch des Nutzers. Basisschema in `story_world/sc
 - `episodes.metrics.warnungen` / `warn_arten`: Tabu- und Altersfreigabe-Warnungen des Prüfers (blockieren nichts;
   Details nur mit reveal, sonst nur `warn_anzahl`)
 
+## Ergänzungen Version 13 (Nachvollzug)
+- `run_events`: Entscheidungsprotokoll je KI-Lauf – run_id, call_id (→ `ai_calls`, die gestellte Frage), phase
+  (auftrag, szenario, planer, vorbereitung, autor, pruefer, lektor, speichern, archivar, bewertung, freigabe,
+  weltentwicklung, uebernahme, abbruch), art (gewichtung, frage, bewertung, pruefung, eingriff, weiterleitung,
+  korrektur, ersatzmodell, entscheidung, warnung, fehler), titel, eingaben/ergebnis (JSON), regel, ausgang
+  (info, ok = weitergeleitet, warnung, eingriff, mensch = wartet auf/kam von dir, fehler), backstage, sekunden
+- `audit_log.run_id`: aus welchem Lauf eine Änderung an der Welt kam
+- Läufe von vor Version 13 werden beim Ansehen aus `steps`, `scenario_sets`, `episodes.check_report`/`metrics` und
+  `ai_calls` zusammengesetzt (`nachvollzug.modus = "rekonstruiert"`, Lücken in `nachvollzug.fehlt`)
+
+## Ergänzungen Version 14 (Stimmen)
+- `threads.stimme_id`, `episodes.stimme_id`: Stimme (virtueller Autor) je Geschichte bzw. mit der die Folge geschrieben wurde
+- Einstellung `stimme`: Welt-Standard; Vorrang Folge > Geschichte > Welt
+- Stimmen liegen außerhalb der Welten in `story_world.stimmen.json` (0600): name, art (autor · mensch · frei), vorbild,
+  profil_id + texte (eigene Texte als Basis), steckbrief, regler (-2 … +2), hinweise, probe (+ freigegeben), messwerte
+  (Satzlänge, Dialoganteil, Wortlänge, Absatzlänge aus eigenen Texten oder freigegebener Probe), proben_archiv
+
+## Ergänzungen Version 15 (Herkunft eingelesener Texte)
+- `impulses.besitzer` (Profil-ID), `impulses.quelle_text` (Text-id), `impulses.fremd` (Text eines anderen Autors),
+  `impulses.content_verborgen`: Inhalt nach Import von einem fremden Profil – die KI nutzt ihn, die Oberfläche zeigt ihn nicht
+- Profil-Text: `fremd`, `autor` (fremder Text ist nie Stilprobe und nie Basis einer Stimme)
+- Stimme: `basis` {owner, owner_name, anker, referenz, verborgen, quelle} – Stilanker und Maßstab-Auszug aus einem Welt-Export
+
+## Ergänzungen Version 16 (Form)
+- `episodes.form`: `folge` (Folge der Reihe) oder `geschichte` (eigenständig, für Hörer ohne Vorwissen; trotzdem Kanon)
+
 ## Texte als Basis (außerhalb der Welten)
 - Profil-Eintrag `texte` / `texte_archiv`: id, titel, quelle, zeichen, woerter, erstellt, stil (Stilprobe ja/nein),
   eingelesen [{welt, am, teile}]; der Text selbst liegt in `profile_texte/<profil-id>/<text-id>.txt` (0600)

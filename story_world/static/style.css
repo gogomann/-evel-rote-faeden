@@ -241,3 +241,46 @@ body:not(.experte) .expert { display: none !important; }
 .cmp pre { max-height: 320px; overflow: auto; white-space: pre-wrap; font-size: 12px; }
 .scen { border-left: 3px solid var(--ki); }
 .scen.best { border-left-color: var(--ok); }
+
+/* Nachvollzug eines Laufs */
+.ocs { display: flex; flex-wrap: wrap; gap: 6px; }
+.oc { font-size: 12px; padding: 2px 9px; border-radius: 10px; border: 1px solid var(--line); }
+.o-ok { --oc: var(--ok); } .o-eingriff { --oc: var(--ki); } .o-warnung { --oc: var(--warn); }
+.o-mensch { --oc: var(--accent); } .o-fehler { --oc: var(--bad); } .o-info { --oc: var(--muted); }
+.oc { color: var(--oc); border-color: var(--oc); }
+.pstrip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0; }
+.ps { background: var(--panel); border: 1.5px solid var(--oc); color: var(--text); border-radius: var(--radius);
+  padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.ps:hover { background: var(--panel2); }
+.ps-arrow { color: var(--muted); font-size: 12px; }
+.ps-live { animation: pulse 1s infinite alternate; }
+details.phase { border: 1px solid var(--line); border-left: 4px solid var(--oc); border-radius: var(--radius);
+  padding: 6px 12px; background: var(--panel); }
+details.phase > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+details.phase > summary .small { font-weight: 400; margin-left: 6px; }
+.ph-i { color: var(--oc); }
+.evs { list-style: none; margin: 4px 0 6px; padding: 0; }
+.ev { display: grid; grid-template-columns: 22px 1fr; gap: 6px; padding: 7px 0; border-top: 1px solid var(--line); }
+.ev:first-child { border-top: 0; }
+.ev-i { color: var(--oc); font-weight: 700; text-align: center; }
+.ev-t { font-size: 13px; }
+.ev-a { font-size: 11px; color: var(--muted); margin-left: 6px; }
+.ev-r { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.ev-d { margin-top: 4px; font-size: 12px; }
+.ev-d > summary { cursor: pointer; color: var(--muted); }
+.ev-h { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin: 8px 0 3px; }
+dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.kv-list { margin: 0; padding-left: 18px; }
+.kv-list > li { margin: 2px 0; }
+.kv-long { white-space: pre-wrap; }
+.tr-calls { margin-top: 6px; }
+.qa-row td { padding: 0 !important; border: 0 !important; }
+.qa-pre { max-height: 360px; overflow: auto; font-size: 12px; }
+
+/* Schreibstil */
+.sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px 24px; }
+.field.slider label { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
+.field.slider input[type="range"] { accent-color: var(--accent); padding: 0; }
+pre.probe { white-space: pre-wrap; max-height: 420px; overflow: auto; font-family: inherit; font-size: 14px; line-height: 1.6; }

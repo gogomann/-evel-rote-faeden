@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import http.client
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -25,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import audio, tts, daily, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, szenarien, vergleich, worlds
+from . import austausch, audio, tts, daily, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, stimmen, szenarien, vergleich, worlds
 
 STATIC = Path(__file__).with_name("static")
 FAVICON = STATIC / "favicon"
@@ -484,13 +485,17 @@ def post_settings(req, body, slug):
 
 def _episode_job(slug: str, wish: str, thread_id: int | None, words: int | None, genre_id: int | None = None,
                  profile_id: str | None = None, age_rating: str | None = None, abweichung: int | None = None,
-                 anzahl: int | None = None, scenario_set_id: int | None = None, scenario_nr: int | None = None) -> dict:
+                 anzahl: int | None = None, scenario_set_id: int | None = None, scenario_nr: int | None = None,
+                 stimme_id: str | None = None, form: str = "folge") -> dict:
+    if stimme_id and not stimmen.get(stimme_id):
+        raise HTTPError(400, "Unbekannte Stimme.")
+
     def work(job_id):
         with worlds.open_world(slug) as conn:
             episode_id = episodes.produce(conn, wish, thread_id, words, job_id=job_id, genre_id=genre_id,
                                           profile_id=profile_id, age_rating=age_rating, abweichung=abweichung,
                                           szenarien_anzahl=anzahl, scenario_set_id=scenario_set_id,
-                                          scenario_nr=scenario_nr)
+                                          scenario_nr=scenario_nr, stimme_id=stimme_id, form=form)
             if episode_id is None:
                 return "Szenarien warten auf deine Wahl – Seite „Geschichten“."
             title = conn.execute("SELECT title FROM episodes WHERE id = ?", (episode_id,)).fetchone()[0]
@@ -533,7 +538,8 @@ def post_episode_ki(req, body, slug):
     abweichung = _small_int(body.get("abweichung"), 0, 3, "Überraschung")
     anzahl = _small_int(body.get("szenarien"), 1, 3, "Anzahl Szenarien")
     return {"job": _episode_job(slug, wish, thread_id, words, genre_id, body.get("profil_id") or None, age or None,
-                                abweichung, anzahl)}
+                                abweichung, anzahl, stimme_id=body.get("stimme_id") or None,
+                                form="geschichte" if body.get("form") == "geschichte" else "folge")}
 
 
 @route("GET", W + "/szenarien")
@@ -556,20 +562,31 @@ def post_scenario_choose(req, body, slug, set_id):
         if s["status"] != "offen":
             raise HTTPError(409, "Diese Szenarien wurden schon entschieden.")
         run = conn.execute("SELECT auftrag FROM ai_runs WHERE id = ?", (s["run_id"],)).fetchone()
+        plans = s.get("szenarien") or []
+        titel = plans[nr - 1].get("titel", "") if 0 < nr <= len(plans) and isinstance(plans[nr - 1], dict) else ""
+        runs.record_event(conn, s["run_id"], "szenario", "entscheidung", f"Du hast Szenario {nr} „{titel}“ gewählt",
+                          ausgang="mensch", ergebnis={"szenario_satz": int(set_id), "nr": nr})
+        conn.commit()
     auftrag = run[0] if run else ""
     words = None
     for line in (auftrag or "").splitlines():
-        if line.startswith("Neue Folge erzeugen (Ziel ca. "):
+        if line.startswith("Neue ") and "erzeugen (Ziel ca. " in line:
             digits = "".join(ch for ch in line.split("ca. ", 1)[1].split(" ")[0] if ch.isdigit())
             words = int(digits) if digits else None
     return {"job": _episode_job(slug, "", None, words, body.get("genre_id") or None, body.get("profil_id") or None,
-                                body.get("altersfreigabe") or None, scenario_set_id=int(set_id), scenario_nr=nr)}
+                                body.get("altersfreigabe") or None, scenario_set_id=int(set_id), scenario_nr=nr,
+                                stimme_id=body.get("stimme_id") or None,
+                                form=(s.get("params") or {}).get("form") or "folge")}
 
 
 @route("POST", W + r"/szenarien/(?P<set_id>\d+)/verwerfen")
 def post_scenario_reject(req, body, slug, set_id):
     with worlds.open_world(slug) as conn:
         szenarien.reject_set(conn, int(set_id))
+        row = conn.execute("SELECT run_id FROM scenario_sets WHERE id = ?", (int(set_id),)).fetchone()
+        runs.record_event(conn, row[0] if row else None, "szenario", "entscheidung", "Du hast die Szenarien verworfen",
+                          ausgang="mensch", ergebnis={"szenario_satz": int(set_id)})
+        conn.commit()
     return {"ok": True}
 
 
@@ -598,7 +615,7 @@ def get_call(req, body, slug, call_id):
         raise HTTPError(403, "Prompt und Antwort können Geheimnisse enthalten – nur mit Backstage sichtbar.")
     with worlds.open_world(slug) as conn:
         call = runs.get_call(conn, int(call_id))
-    call.pop("messages", None)
+    call["nachrichten"] = [runs.trim_message(m) for m in call.pop("messages", None) or []]
     return call
 
 
@@ -655,6 +672,10 @@ def post_episode_release(req, body, slug, episode_id):
         if not cur.rowcount:
             raise HTTPError(409, "Folge wartet nicht auf Freigabe.")
         service.audit(conn, "nutzer", "freigabe", "episodes", int(episode_id))
+        row = conn.execute("SELECT run_id FROM episodes WHERE id = ?", (int(episode_id),)).fetchone()
+        runs.record_event(conn, row[0] if row else None, "freigabe", "entscheidung", "Du hast die Folge freigegeben",
+                          regel="Folgen mit schwerem Prüfer-Befund zählen erst nach deiner Freigabe.", ausgang="mensch",
+                          ergebnis={"folge": int(episode_id), "status": "fertig"})
         return {"ok": True}
 
 
@@ -752,6 +773,128 @@ def get_profile(req, body, pid):
                 formate=list(textimport.FORMATS))
 
 
+# ---- Export & Import (Umzug auf einen anderen Rechner)
+
+@route("GET", "/api/exporte")
+def get_exports(req, body):
+    return {"exporte": austausch.list_exports(), "ordner": str(austausch.export_dir())}
+
+
+@route("POST", "/api/export")
+def post_export(req, body):
+    typ = body.get("typ")
+    try:
+        if typ == "welt":
+            return austausch.export_world(str(body.get("welt") or ""), bool(body.get("audio")))
+        if typ == "autor":
+            return austausch.export_author()
+        if typ == "alles":
+            return austausch.export_all(bool(body.get("audio")))
+    except austausch.ExchangeError as exc:
+        raise HTTPError(400, str(exc))
+    raise HTTPError(400, "Unbekannte Exportart.")
+
+
+@route("POST", "/api/import/datei")
+def post_import_file(req, body):
+    try:
+        return austausch.import_package(austausch.export_file(str(body.get("datei") or "")))
+    except austausch.ExchangeError as exc:
+        raise HTTPError(400, str(exc))
+
+
+# ---- Stimmen (virtueller Autor, app-weit)
+
+V = r"/api/stimmen/(?P<vid>v_[0-9a-f]{8})"
+
+
+def _voice_call(fn, *args):
+    try:
+        result = fn(*args)
+    except (stimmen.VoiceError, llm.LLMError) as exc:
+        raise HTTPError(400, str(exc))
+    return stimmen.public(result) if isinstance(result, dict) and str(result.get("id", "")).startswith("v_") else result
+
+
+@route("GET", "/api/stimmen")
+def get_stimmen(req, body):
+    data = stimmen.list_voices()
+    data["stimmen"] = [stimmen.public(v) for v in data["stimmen"]]
+    data["archiv"] = [stimmen.public(v) for v in data["archiv"]]
+    return dict(data, menschen=[{"id": p["id"], "name": p["name"],
+                                                  "texte": [{k: t.get(k) for k in ("id", "titel", "woerter", "stil")}
+                                                            for t in p.get("texte", [])]}
+                                                 for p in profiles.list_profiles()["profiles"]])
+
+
+@route("POST", "/api/stimmen")
+def post_stimme(req, body):
+    return _voice_call(stimmen.create, body)
+
+
+@route("GET", V)
+def get_stimme(req, body, vid):
+    v = stimmen.get(vid)
+    if v is None:
+        raise HTTPError(404, "Stimme nicht gefunden.")
+    return dict(stimmen.public(v), schreib_block=stimmen.redact(stimmen.writer_block(v)),
+                pruef_block=stimmen.checker_block(v), probe_audio_aktuell=stimmen.probe_audio_current(v))
+
+
+@route("PUT", V)
+def put_stimme(req, body, vid):
+    return stimmen.public(stimmen.edit(vid, body))
+
+
+@route("POST", V + "/auswerten")
+def post_voice_analyze(req, body, vid):
+    return _voice_call(stimmen.analyze, vid)
+
+
+@route("POST", V + "/probe")
+def post_voice_probe(req, body, vid):
+    welt = ""
+    if body.get("welt"):
+        with worlds.open_world(str(body["welt"])) as conn:
+            meta = service.meta(conn)
+        welt = f"{meta.get('name', '')}: {str(meta.get('beschreibung', ''))[:1500]}"
+    return _voice_call(stimmen.probe, vid, welt, int(body.get("woerter") or 220))
+
+
+@route("POST", V + "/probe/audio")
+def post_voice_probe_audio(req, body, vid):
+    ref, words = str(body.get("stimme") or ""), []
+    if body.get("welt"):
+        with worlds.open_world(str(body["welt"])) as conn:
+            ref = ref or tts.cast(conn).get(episodes.NARRATOR, "")
+            words = audio.lexicon(conn)
+    return _voice_call(stimmen.probe_audio, vid, ref, words)
+
+
+@route("POST", V + "/probe/freigeben")
+def post_voice_probe_ok(req, body, vid):
+    return _voice_call(stimmen.approve_probe, vid, bool(body.get("ok", True)))
+
+
+@route("POST", V + "/archiv")
+def post_voice_archive(req, body, vid):
+    stimmen.archive(vid, back=bool(body.get("zurueck")))
+    return {"ok": True}
+
+
+@route("PUT", W + r"/stories/(?P<thread_id>\d+)/stimme")
+def put_story_voice(req, body, slug, thread_id):
+    vid = str(body.get("stimme_id") or "").strip() or None
+    if vid and not stimmen.get(vid):
+        raise HTTPError(400, "Unbekannte Stimme.")
+    with worlds.open_world(slug) as conn:
+        cur = conn.execute("UPDATE threads SET stimme_id = ? WHERE id = ?", (vid, int(thread_id)))
+        if not cur.rowcount:
+            raise HTTPError(404, "Geschichte nicht gefunden.")
+        service.audit(conn, "nutzer", "stimme", "threads", int(thread_id), detail=vid or "keine")
+    return {"ok": True}
+
+
 T = U + r"/texte/(?P<tid>t_[0-9a-f]{8})"
 
 
@@ -770,7 +913,8 @@ def post_profile_text(req, body, pid):
             raise HTTPError(400, str(exc))
     try:
         title = body.get("titel") or (name.rsplit(".", 1)[0] if name else "")
-        return profiles.add_text(pid, title, text, name or "eingefügt", bool(body.get("stil", True)))
+        return profiles.add_text(pid, title, text, name or "eingefügt", bool(body.get("stil", True)),
+                                 fremd=bool(body.get("fremd")), autor=str(body.get("autor") or ""))
     except profiles.ProfileError as exc:
         raise HTTPError(400, str(exc))
 
@@ -782,7 +926,10 @@ def get_profile_text(req, body, pid, tid):
 
 @route("PUT", T)
 def put_profile_text(req, body, pid, tid):
-    return profiles.update_text(pid, tid, body)
+    result = profiles.update_text(pid, tid, body)
+    if "fremd" in body:
+        stimmen.refresh_owner(pid)
+    return result
 
 
 @route("POST", T + "/archivieren")
@@ -812,6 +959,8 @@ def post_text_import(req, body, slug):
             with worlds.open_world(slug) as conn:
                 impulse_id = service.create_impulse(conn, title, part + (f"\n\nHINWEIS DES NUTZERS: {hint}" if hint else ""),
                                                     "text")
+                conn.execute("UPDATE impulses SET besitzer = ?, quelle_text = ?, fremd = ? WHERE id = ?",
+                             (pid, tid, 1 if meta.get("fremd") else 0, impulse_id))
                 service.set_impulse_status(conn, impulse_id, "in_arbeit")
                 conn.commit()
                 impulse = dict(conn.execute("SELECT * FROM impulses WHERE id = ?", (impulse_id,)).fetchone())
@@ -1021,10 +1170,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _send_file(self, path, download: bool = False):
-        """Audiodatei mit Range-Unterstützung (Spulen im Browser)."""
+    def _send_file(self, path, download: bool = False, ctype: str | None = None):
+        """Datei mit Range-Unterstützung (Audio zum Spulen im Browser, Export-ZIP zum Herunterladen)."""
         size = path.stat().st_size
-        ctype = "audio/mp4" if path.suffix == ".m4a" else "audio/wav"
+        ctype = ctype or ("audio/mp4" if path.suffix == ".m4a" else "audio/wav")
         start, end, status = 0, size - 1, 200
         match = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
         if match and (match.group(1) or match.group(2)):
@@ -1054,6 +1203,30 @@ class Handler(BaseHTTPRequestHandler):
                     break
                 self.wfile.write(chunk)
                 remaining -= len(chunk)
+
+    def _import_upload(self) -> dict:
+        """Export-ZIP als Rohdaten (Content-Type application/zip) entgegennehmen und importieren."""
+        length = int(self.headers.get("Content-Length") or 0)
+        if not length:
+            raise HTTPError(400, "Keine Datei erhalten.")
+        if length > austausch.MAX_IMPORT:
+            raise HTTPError(413, "Datei zu groß.")
+        tmp = austausch.export_dir() / f"_upload-{os.getpid()}-{threading.get_ident()}.zip.part"
+        try:
+            with open(tmp, "wb") as fh:
+                left = length
+                while left > 0:
+                    chunk = self.rfile.read(min(1 << 20, left))
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    left -= len(chunk)
+            try:
+                return austausch.import_package(tmp)
+            except austausch.ExchangeError as exc:
+                raise HTTPError(400, str(exc))
+        finally:
+            tmp.unlink(missing_ok=True)  # nur die Upload-Zwischendatei; der Import selbst liegt danach in welten/
 
     def _handle(self, method: str):
         try:
@@ -1090,6 +1263,18 @@ class Handler(BaseHTTPRequestHandler):
                 voice = q.get("stimme") or ""
                 data = tts.synth(server, (q.get("text") or "Hallo, so klinge ich.")[:300], voice, tts.language_of(server, voice))
                 return self._send(200, data, "audio/wav")
+            exp_file = re.match(r"^/api/exporte/(?P<name>[A-Za-z0-9._-]+\.zip)$", path)
+            if method == "GET" and exp_file:
+                return self._send_file(austausch.export_file(exp_file.group("name")), download=True,
+                                       ctype="application/zip")
+            probe_wav = re.match(r"^/api/stimmen/(?P<vid>v_[0-9a-f]{8})/probe\.wav$", path)
+            if method == "GET" and probe_wav:
+                target = stimmen.probe_audio_path(probe_wav.group("vid"))
+                if not target.exists():
+                    raise HTTPError(404, "Für diese Probe gibt es noch keine Audiodatei.")
+                return self._send_file(target, download="download" in (urlparse(self.path).query or ""))
+            if method == "POST" and path == "/api/import":
+                return self._send(200, self._import_upload())
             export = re.match("^" + W + r"/episodes/(?P<eid>\d+)/export(?P<pdf>\.pdf)?$", path)
             if method == "GET" and export:
                 with worlds.open_world(export.group("slug")) as conn:

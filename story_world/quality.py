@@ -524,7 +524,11 @@ def style_values(text: str) -> dict:
     quotes = len(re.findall(r"[„\"»]", body))
     share = len(dialog) / len(lines) if lines and any(ln.lstrip().startswith("[") for ln in lines) \
         else min(1.0, quotes / max(1, len(sentences)))
-    return {"satzlaenge": round(sum(ws) / len(ws), 1), "dialoganteil": round(share, 2)}
+    tokens = _WORD.findall(body)
+    paras = [len(_WORD.findall(_SPEAKER.sub("", ln))) for ln in lines if _WORD.search(_SPEAKER.sub("", ln))]
+    return {"satzlaenge": round(sum(ws) / len(ws), 1), "dialoganteil": round(share, 2),
+            "wortlaenge": round(sum(len(t) for t in tokens) / max(1, len(tokens)), 2),
+            "absatzlaenge": round(sum(paras) / max(1, len(paras)), 1)}
 
 
 def style_deviation(text: str, reference: str) -> float | None:

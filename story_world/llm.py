@@ -92,6 +92,11 @@ def build_messages(conn: sqlite3.Connection, task: str) -> list:
     ]
 
 
+def impulse_content(impulse: dict) -> str:
+    """Inhalt für die KI – auch wenn er nach einem Import verborgen liegt (Text eines anderen Autors)."""
+    return impulse.get("content_verborgen") or impulse.get("content") or ""
+
+
 def impulse_task(impulse: dict) -> str:
     if impulse["kind"] == "nachricht":
         return (
@@ -99,7 +104,7 @@ def impulse_task(impulse: dict) -> str:
             "Story-Welt ein: Übertrage ihren Kern in die Welt, statt sie nachzuerzählen, sodass das Wissen darin "
             "beim Hören mitschwingt. Halte den Bezug zur realen Nachricht als backstage-Datensatz fest "
             "(z. B. Weltregel der Kategorie 'Nachrichtenquelle').\n"
-            f"Titel: {impulse['title']}\n{impulse['content']}"
+            f"Titel: {impulse['title']}\n{impulse_content(impulse)}"
         )
     if impulse["kind"] == "text":
         return (
@@ -109,11 +114,11 @@ def impulse_task(impulse: dict) -> str:
             "Wesentliches hinzu; fülle nur, was zum Verständnis nötig ist. Widerspricht der Text dem Kanon, überschreibe "
             "nichts, sondern nenne den Widerspruch unter 'rueckfragen'. Enthält der Abschnitt kein neues Weltwissen, "
             "antworte mit leerer Operationsliste.\n"
-            f"Titel: {impulse['title']}\n{impulse['content']}"
+            f"Titel: {impulse['title']}\n{impulse_content(impulse)}"
         )
     return (
         f"Arbeite diesen Impuls des Nutzers in die Welt ein (Art: {impulse['kind']}).\n"
-        f"Titel: {impulse['title']}\n{impulse['content']}\n\n"
+        f"Titel: {impulse['title']}\n{impulse_content(impulse)}\n\n"
         "Lege an, was nötig ist, damit daraus erzählbares Material wird (Orte, Figuren, Völker, Stränge, "
         "Ereignisse, Wissen, Rätsel, Codes), und ergänze dabei berührte Lücken."
     )
@@ -246,10 +251,19 @@ def propose(conn: sqlite3.Connection, task: str, impulse_id: int | None = None, 
         raise
 
 
-def maybe_auto_apply(conn: sqlite3.Connection, proposal_id: int, payload: dict, run=None) -> bool:
+def maybe_auto_apply(conn: sqlite3.Connection, proposal_id: int, payload: dict, run=None,
+                     phase: str = "uebernahme") -> bool:
     """Übernimmt automatisch, wenn eingestellt und die KI keine Rückfragen hat.
     Scheitert die Übernahme, bleibt der Vorschlag offen – der Lauf selbst gilt nicht als gescheitert."""
+    rule = ("Automatisch übernommen wird nur, wenn „Automatisch übernehmen“ eingestellt ist und die KI keine "
+            "Rückfragen hat – sonst wartet der Vorschlag auf deine Entscheidung.")
+    decide = getattr(run, "decide", None) if run else None
     if service.setting(conn, "auto_uebernehmen") != "1" or payload.get("rueckfragen"):
+        if decide:
+            reason = "KI hat Rückfragen" if payload.get("rueckfragen") else "automatische Übernahme ist ausgeschaltet"
+            decide(phase, "entscheidung", f"Vorschlag #{proposal_id} wartet auf dich ({reason})", regel=rule,
+                   ausgang="mensch", ergebnis={"vorschlag": proposal_id, "rueckfragen": payload.get("rueckfragen") or []},
+                   backstage=True)
         return False
     try:
         report = service.apply_proposal(conn, proposal_id)
@@ -258,6 +272,9 @@ def maybe_auto_apply(conn: sqlite3.Connection, proposal_id: int, payload: dict, 
         conn.commit()
         if run:
             run.step(f"Automatische Übernahme nicht möglich: {exc}", None, "fehler")
+        if decide:
+            decide(phase, "entscheidung", f"Vorschlag #{proposal_id}: automatische Übernahme nicht möglich – bleibt offen",
+                   regel=rule, ausgang="fehler", ergebnis={"vorschlag": proposal_id, "grund": str(exc)})
         return False
     if run:
         text = f"Automatisch übernommen: {report['angelegt']} angelegt, {report['ergaenzt']} ergänzt"
@@ -266,4 +283,8 @@ def maybe_auto_apply(conn: sqlite3.Connection, proposal_id: int, payload: dict, 
         run.step(text, 100, "ok")
         for hint in report["hinweise"]:
             run.step(hint, None, "warnung")
+        if decide:
+            decide(phase, "entscheidung", text, regel=rule, ausgang="warnung" if report["fehlgeschlagen"] else "ok",
+                   ergebnis={"vorschlag": proposal_id, "angelegt": report["angelegt"], "ergaenzt": report["ergaenzt"],
+                             "uebersprungen": report["fehlgeschlagen"], "hinweise": report["hinweise"][:20]})
     return True

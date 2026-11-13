@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Story World: So entsteht eine Folge</title>
+<script>
+  (function () {
+    var t = null;
+    try { var p = new URLSearchParams(location.search).get('theme'); if (p === 'light' || p === 'dark') t = p; } catch (_) {}
+    if (!t) { try { t = localStorage.getItem('sw-prozess-theme'); } catch (_) {} }
+    if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<style>
+  [data-theme="dark"] {
+    --bg:#020617; --grid:#1e293b; --text:#fff; --text-muted:#94a3b8; --text-dim:#475569; --text-faint:#7d8da1;
+    --panel:rgba(15,23,42,.6); --panel-border:#1e293b; --lane-fill:rgba(15,23,42,.22); --lane-stroke:#334155;
+    --arrow:#64748b; --arrow-emphasis:#34d399; --mask:#0f172a;
+    --frontend-fill:rgba(8,51,68,.4); --frontend-stroke:#22d3ee;
+    --backend-fill:rgba(6,78,59,.4); --backend-stroke:#34d399;
+    --database-fill:rgba(76,29,149,.4); --database-stroke:#a78bfa;
+    --security-fill:rgba(136,19,55,.4); --security-stroke:#fb7185;
+    --external-fill:rgba(30,41,59,.5); --external-stroke:#94a3b8;
+    --amber:#fbbf24; --btn-bg:rgba(15,23,42,.8); --btn-border:#334155; --btn-text:#e2e8f0;
+  }
+  [data-theme="light"] {
+    --bg:#f8fafc; --grid:#e2e8f0; --text:#0f172a; --text-muted:#64748b; --text-dim:#94a3b8; --text-faint:#64748b;
+    --panel:#fff; --panel-border:#e2e8f0; --lane-fill:rgba(248,250,252,.65); --lane-stroke:#cbd5e1;
+    --arrow:#94a3b8; --arrow-emphasis:#059669; --mask:#fff;
+    --frontend-fill:rgba(34,211,238,.15); --frontend-stroke:#0891b2;
+    --backend-fill:rgba(52,211,153,.18); --backend-stroke:#059669;
+    --database-fill:rgba(167,139,250,.2); --database-stroke:#7c3aed;
+    --security-fill:rgba(251,113,133,.15); --security-stroke:#e11d48;
+    --external-fill:rgba(148,163,184,.18); --external-stroke:#64748b;
+    --amber:#d97706; --btn-bg:rgba(255,255,255,.92); --btn-border:#cbd5e1; --btn-text:#334155;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--text);
+    font-family:"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  body {
+    background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 40px 40px; background-attachment: fixed; min-height:100vh;
+  }
+  .wrap { max-width:1560px; margin:0 auto; padding:28px 24px 48px; }
+  header { display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:14px; }
+  h1 { margin:0; font-size:22px; font-weight:700; letter-spacing:-.01em; }
+  .lead { margin:6px 0 0; color:var(--text-muted); font-size:13px; max-width:820px; line-height:1.55; }
+  .tools { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  button, .seg { font:inherit; font-size:12px; color:var(--btn-text); background:var(--btn-bg); border:1px solid var(--btn-border);
+    border-radius:6px; padding:7px 11px; cursor:pointer; }
+  button:hover { border-color:var(--arrow-emphasis); }
+  button:focus-visible { outline:2px solid var(--arrow-emphasis); outline-offset:2px; }
+  .seg { display:inline-flex; padding:0; overflow:hidden; }
+  .seg button { border:0; border-radius:0; background:transparent; }
+  .seg button[aria-pressed="true"] { background:var(--arrow-emphasis); color:var(--bg); }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; margin:4px 0 12px; font-size:11px; color:var(--text-muted); }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .legend i { width:12px; height:12px; border-radius:3px; border:1.5px solid; display:inline-block; }
+  .stage { border:1px solid var(--panel-border); border-radius:10px; background:var(--panel); padding:10px; }
+  svg { display:block; width:100%; height:auto; }
+  svg text { font-family:inherit; }
+  .lane { fill:var(--lane-fill); stroke:var(--lane-stroke); stroke-width:1; }
+  .lane.exc { stroke-dasharray:6 4; }
+  .lane-label { fill:var(--text-muted); font-size:11px; letter-spacing:.06em; text-transform:uppercase; }
+  .c-mask { fill:var(--mask); }
+  .c-frontend { fill:var(--frontend-fill); stroke:var(--frontend-stroke); }
+  .c-backend { fill:var(--backend-fill); stroke:var(--backend-stroke); }
+  .c-database { fill:var(--database-fill); stroke:var(--database-stroke); }
+  .c-security { fill:var(--security-fill); stroke:var(--security-stroke); }
+  .c-external { fill:var(--external-fill); stroke:var(--external-stroke); }
+  .n-label { fill:var(--text); font-size:13px; font-weight:600; }
+  .n-sub { fill:var(--text-muted); font-size:11px; }
+  .n-num { font-size:10px; font-weight:700; }
+  .t-frontend { fill:var(--frontend-stroke); } .t-backend { fill:var(--backend-stroke); } .t-database { fill:var(--database-stroke); }
+  .t-security { fill:var(--security-stroke); } .t-external { fill:var(--external-stroke); }
+  .e { fill:none; stroke-width:1.4; stroke:var(--arrow); }
+  .e.emphasis { stroke:var(--arrow-emphasis); stroke-width:1.8; }
+  .e.return { stroke-dasharray:5 4; }
+  .e.error { stroke:var(--security-stroke); stroke-dasharray:5 4; }
+  .m-default { fill:var(--arrow); } .m-emphasis { fill:var(--arrow-emphasis); } .m-error { fill:var(--security-stroke); }
+  .e-label-bg { fill:var(--mask); }
+  .e-label { fill:var(--text-muted); font-size:11px; }
+  [data-node] { cursor:pointer; transition:opacity .2s; }
+  [data-node]:focus { outline:none; }
+  [data-node]:focus-visible .c-shape { stroke-width:2.5; }
+  .e, .e-lbl { transition:opacity .2s; }
+  svg.focus [data-node]:not(.on) { opacity:.42; }
+  svg.focus .e:not(.on), svg.focus .e-lbl:not(.on) { opacity:.3; }
+  [data-node].on .c-shape { stroke-width:2.6; filter:drop-shadow(0 0 6px currentColor); }
+  .e.on { stroke-dasharray:6 6; animation:flow 0.9s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset:-12; } }
+  @media (prefers-reduced-motion: reduce) { .e.on { animation:none; } }
+  .scrub { display:flex; align-items:center; gap:12px; margin:12px 4px 2px; font-size:12px; color:var(--text-muted); }
+  .scrub input { flex:1; accent-color:var(--arrow-emphasis); }
+  .scrub output { min-width:46px; text-align:right; color:var(--text); font-weight:700; }
+  .panel { margin-top:14px; display:grid; grid-template-columns: minmax(0,1.25fr) minmax(0,1fr); gap:14px; }
+  @media (max-width: 900px) { .panel { grid-template-columns:1fr; } }
+  .card { border:1px solid var(--panel-border); background:var(--panel); border-radius:10px; padding:16px 18px; }
+  .card h2 { margin:0 0 4px; font-size:17px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .badge { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; border:1px solid; border-radius:999px; padding:2px 8px; }
+  .pct { color:var(--text-muted); font-size:12px; font-weight:400; }
+  .card p { margin:8px 0 0; font-size:13px; line-height:1.65; color:var(--text); }
+  .io { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; margin-top:12px; font-size:12px; line-height:1.5; }
+  .io b { color:var(--text-muted); font-weight:500; }
+  .card h3 { margin:0 0 8px; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+  .card ul { margin:0; padding-left:18px; font-size:12px; line-height:1.65; }
+  .card li + li { margin-top:3px; }
+  .code { margin-top:10px; font-size:11px; color:var(--text-faint); }
+  .code code { color:var(--database-stroke); }
+  .hint { font-size:12px; color:var(--text-faint); line-height:1.6; }
+  .nav { display:flex; gap:8px; align-items:center; margin-top:14px; font-size:12px; color:var(--text-muted); }
+  .nav .count { margin-left:auto; }
+  [data-mode="einfach"] .expert { display:none; }
+  .facts { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; margin-top:14px; }
+  .facts .card h3::before { content:""; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:1px; background:var(--dot); }
+  kbd { font:inherit; font-size:10px; border:1px solid var(--btn-border); border-radius:4px; padding:0 4px; }
+</style>
+</head>
+<body data-mode="einfach">
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Story World: So entsteht eine Folge</h1>
+      <p class="lead">Vom Wunsch bis zum Hörbuch – Schritt für Schritt. Die Prozentwerte sind dieselben wie im Fortschritt eines Laufs im Protokoll. Klick auf einen Schritt oder starte den Rundgang.</p>
+    </div>
+    <div class="tools">
+      <button id="play" aria-pressed="false">▶ Rundgang</button>
+      <div class="seg" role="group" aria-label="Detailtiefe">
+        <button data-mode="einfach" aria-pressed="true">Einfach</button>
+        <button data-mode="experte" aria-pressed="false">Experte</button>
+      </div>
+      <button id="theme" title="Farbschema (T)">◐ Hell/Dunkel</button>
+    </div>
+  </header>
+
+  <div class="legend" id="legend"></div>
+
+  <div class="stage">
+    <svg id="dia" role="img" aria-labelledby="dia-title"><title id="dia-title">Ablauf der Folgen-Erzeugung in Story World</title></svg>
+    <div class="scrub">
+      <label for="pct">Was passiert bei</label>
+      <input id="pct" type="range" min="0" max="100" value="0" step="1">
+      <output id="pctOut" for="pct">0 %</output>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="card" id="detail"></div>
+    <div class="card">
+      <div class="expert" id="expertBox"></div>
+      <div id="simpleBox" class="hint"></div>
+      <div class="nav">
+        <button id="prev" aria-label="Vorheriger Schritt">←</button>
+        <button id="next" aria-label="Nächster Schritt">→</button>
+        <span class="count" id="count"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="facts">
+    <div class="card" style="--dot:var(--frontend-stroke)"><h3>Wer arbeitet</h3>
+      <ul><li>Planer, Autor, Prüfer, Lektor und Archivar sind KI-Rollen – welches Modell, legst du unter „Modelle je Aufgabe“ fest.</li>
+      <li>Vorbereitung, Speichern und Bewertung sind reiner Code – ohne KI-Kosten.</li></ul></div>
+    <div class="card" style="--dot:var(--amber)"><h3>Nichts geht verloren</h3>
+      <ul><li>Ab 93 % ist die Folge gespeichert – scheitert danach etwas, bleibt sie erhalten.</li>
+      <li>Bricht der Autor ab, wird vorhandener Text als Entwurf gesichert.</li></ul></div>
+    <div class="card" style="--dot:var(--database-stroke)"><h3>Kontext</h3>
+      <ul><li><b>Voll:</b> jede Rolle sieht den ganzen Kanon.</li>
+      <li><b>Kaskade:</b> nur die Beteiligten samt Umfeld – kleiner, gezielter Kontext.</li></ul></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var KIND = {
+    frontend: 'Du', backend: 'KI-Rolle', database: 'Code', security: 'Prüfung', external: 'Ergebnis'
+  };
+  var LEGEND = [['frontend', 'Du / Oberfläche'], ['backend', 'KI-Rolle'], ['database', 'Code & Datenbank'],
+                ['security', 'Prüfung & Entscheidung'], ['external', 'Ergebnis / Ausnahme']];
+
+  // Inhalte: aus story_world/episodes.py, szenarien.py und audio.py abgeleitet
+  var NODES = [
+    { id: 'auftrag', lane: 0, col: 0, type: 'frontend', label: 'Auftrag', sub: '0–2 %', pct: [0, 2], who: 'Du',
+      simple: 'Du gibst einen Wunsch ein – oder lässt die Welt einfach weitererzählen. Dazu kommen Genre, Länge, Altersfreigabe und dein Erzählprofil.',
+      input: 'Wunsch, Strang, Genre, Länge, Altersfreigabe', output: 'Auftrag im Protokoll',
+      expert: ['Ohne Längenangabe gilt die Einstellung <code>folge_woerter</code> (135 Wörter ≈ 1 Minute).',
+               'Kontextmodus aus <code>kontext_modus</code>: voll oder Kaskade.',
+               'Überraschungsstufe und Anzahl Szenarien kommen aus Strang bzw. Genre.',
+               'Protokoll: „Auftrag angenommen – Erzählprofil …“'],
+      code: 'episodes.produce()' },
+    { id: 'planer', lane: 0, col: 1, type: 'backend', label: 'Planer', sub: '2–12 % · KI', pct: [2, 12], who: 'KI-Rolle „planer“',
+      simple: 'Die KI entwirft den Bauplan der Folge: Titel, Kapitel, mit welcher Figur es emotional beginnt und wie es endet.',
+      input: 'Kanon, letzte Folgen, offene Ripples und Rätsel, dein Wunsch', output: 'Plan (JSON): Titel, Typ, Kapitel, Einstieg, Weltzeit, Ende',
+      expert: ['Typ: gegenwart, rueckblende, vorausblick oder parallel.',
+               'Der Plan wird per Code geprüft – bei Formfehlern fragt das System nach.',
+               'Ab Überraschungsstufe 2 plant er eine Wendung, die später nicht geglättet werden darf.',
+               'Protokoll: „Plan: „Titel“ – n Kapitel, Typ …“ (12 %)'],
+      code: 'episodes._plan()' },
+    { id: 'szenario', lane: 1, col: 1, type: 'frontend', label: 'Szenarien', sub: 'wartet auf dich', pct: null, who: 'Du',
+      simple: 'Ist mehr als ein Szenario eingestellt, entwirft die KI mehrere Varianten und hält an. Du wählst auf der Seite „Geschichten“ – dann geht es mit deinem Favoriten weiter.',
+      input: 'Mehrere Plan-Varianten', output: 'Dein gewählter Plan',
+      expert: ['Der Lauf endet mit „Szenarien warten auf deine Wahl“.',
+               'Der neue Auftrag übernimmt das gewählte Szenario direkt (12 %), der Planer läuft nicht noch mal.'],
+      code: 'szenarien.run_flow() · szenarien.take()' },
+    { id: 'vorbereitung', lane: 0, col: 2, type: 'database', label: 'Vorbereitung', sub: '12–15 % · Code', pct: [12, 15], who: 'Code',
+      simple: 'Das System legt an, was der Plan braucht: den Erzählstrang und die Besetzung der Figuren. Hier arbeitet keine KI.',
+      input: 'Plan', output: 'Strang, besetzte Figuren, Genre',
+      expert: ['Neue Datensätze aus dem Plan werden angelegt, Figuren auf ihre ids aufgelöst.',
+               'Hat die Geschichte noch kein Genre, wird es jetzt festgelegt und bleibt für die Folgen.',
+               'Protokoll: „Strang #n, x Figuren besetzt“ (15 %)'],
+      code: 'episodes._apply_preparation() · _cast()' },
+    { id: 'neuplanen', lane: 1, col: 2, type: 'external', label: 'Neu planen', sub: 'max. 2 Versuche', pct: null, who: 'Code → KI',
+      simple: 'Lässt sich der Plan nicht umsetzen, wird die Vorbereitung zurückgenommen und der Planer plant neu – mit dem Fehler als Hinweis.',
+      input: 'Fehler der Vorbereitung', output: 'Neuer Plan',
+      expert: ['<code>PLAN_ATTEMPTS = 2</code> – danach Abbruch mit Fehlermeldung.',
+               'Ein neuer Plan gehört nicht mehr zum Szenario-Satz.',
+               'Protokoll-Warnung: „Plan nicht ausführbar …“ (13 %)'],
+      code: 'episodes.produce() · PlanBroken' },
+    { id: 'autor', lane: 0, col: 3, type: 'backend', label: 'Autor', sub: '15–75 % · KI', pct: [15, 75], who: 'KI-Rolle „autor“',
+      simple: 'Die KI schreibt die Folge Kapitel für Kapitel. Jedes Kapitel kennt das Ende des vorigen, die Figuren, die Zeit und passende Erinnerungen aus älteren Folgen.',
+      input: 'Plan, Figuren, Kalender, Erinnerungen, bisheriger Text', output: 'Kapiteltexte (Autorfassung)',
+      expert: ['15–75 % werden gleichmäßig auf die Kapitel verteilt.',
+               'Etwa 1 600 Wörter je Kapitel, wenn der Plan nichts anderes vorgibt.',
+               'Kapitel 1: emotionaler Einstieg und Anknüpfung an die letzte Folge. Letztes Kapitel: Bogen schließen, dann Überleitung.',
+               'Erinnerung: bis zu 6 passende Folgen/Fakten – nur bis zur Weltzeit der Folge.',
+               'Rückblende/Vorausblick: nur der Weltzustand dieses Zeitpunkts.',
+               'Verweigerungen der KI werden als Qualitätswert erfasst.'],
+      code: 'episodes._write_chapter()' },
+    { id: 'entwurf', lane: 1, col: 3, type: 'external', label: 'Entwurf', sub: 'Abbruch mit Text', pct: null, who: 'Code',
+      simple: 'Bricht der Lauf ab, nachdem schon Text geschrieben wurde, wird das Bisherige als Entwurf gespeichert.',
+      input: 'Bisherige Kapitel', output: 'Folge mit Status „entwurf“',
+      expert: ['Nur wenn Kapitel existieren und noch keine Folge gespeichert ist.',
+               'Protokoll: „Bisheriger Text als Entwurf #n gesichert“'],
+      code: 'episodes._save(status="entwurf")' },
+    { id: 'pruefer', lane: 0, col: 4, type: 'security', label: 'Prüfer', sub: '76–82 % · KI', pct: [75, 82], who: 'KI-Rolle „pruefer“',
+      simple: 'Eine zweite KI liest die ganze Folge gegen: Widersprüche zum Kanon, Zeitfehler, wer was wissen kann und ob der Erzähler ehrlich bleibt.',
+      input: 'Alle Kapitel, Plan, automatische Kanon-Prüfung', output: 'Hinweise mit Schwere niedrig / mittel / hoch',
+      expert: ['Bewusst ein anderes Modell als der Autor – sonst gibt es eine Warnung.',
+               'Bekommt zusätzlich Genre-Tabus, Altersfreigabe und Erzählprofil.',
+               'Tabu- und Altersfreigabe-Befunde sind nur Warnungen, nie „hoch“.',
+               'Fällt der Prüfer aus, geht es ohne ihn weiter.',
+               'Protokoll: „Prüfer: n Hinweise, davon m wichtig“ (82 %)'],
+      code: 'episodes._check()' },
+    { id: 'lektor', lane: 0, col: 5, type: 'backend', label: 'Lektor', sub: '82–92 % · KI', pct: [82, 92], who: 'KI-Rolle „lektor“',
+      simple: 'Eine KI glättet jedes Kapitel und baut die Korrekturen des Prüfers ein – immer dasselbe Modell, damit die ganze Reihe gleich klingt.',
+      input: 'Kapitel + Hinweise des Prüfers', output: 'Überarbeitete Kapitel',
+      expert: ['Nur das erste Modell der Kette – kein Wechsel auf ein Ersatzmodell.',
+               'Eine geplante Wendung wird nicht vorweggenommen oder entschärft.',
+               'Lektor-Schaden wird gemessen (Autorfassung gegen Lektorfassung).',
+               'Protokoll: „Lektorat abgeschlossen“ (92 %)'],
+      code: 'episodes._edit()' },
+    { id: 'speichern', lane: 0, col: 6, type: 'database', label: 'Speichern', sub: '93 % · Code', pct: [92, 93], who: 'Code',
+      simple: 'Die Folge landet in der Welt-Datenbank. Ab hier ist sie sicher.',
+      input: 'Fertiger Text', output: 'Folge #n mit fortlaufender Nummer',
+      expert: ['Status zunächst „fertig“.',
+               'Protokoll: „Folge #n gespeichert: x Wörter ≈ y Minuten“ (93 %)'],
+      code: 'episodes._save()' },
+    { id: 'archivar', lane: 0, col: 7, type: 'backend', label: 'Archivar', sub: '93–97 % · KI', pct: [93, 97], who: 'KI-Rolle „archivar“',
+      simple: 'Eine KI liest die Folge und trägt Neues in die Welt ein: Fakten, Ereignisse, Rätselstand und die Übergabe an die nächste Folge.',
+      input: 'Folge, Plan, Kanon', output: 'Zusammenfassung, Ende-Übergabe, Änderungen am Kanon',
+      expert: ['Zeit-Cursor des Strangs wandert nur vorwärts.',
+               'Rätsel nur vorwärts: offen → angedeutet → bestätigt → aufgelöst.',
+               'Einschübe und Ripples werden als verwendet bzw. erledigt markiert.',
+               'Scheitert er: Warnung – die Folge bleibt erhalten.'],
+      code: 'episodes._archive() · _apply_archive()' },
+    { id: 'bewertung', lane: 0, col: 8, type: 'security', label: 'Bewertung', sub: '97–99 % · Code', pct: [97, 99], who: 'Code',
+      simple: 'Code misst die Qualität – ohne KI-Kosten – und entscheidet: fertig oder Freigabe nötig.',
+      input: 'Folge, Prüfhinweise, Archiv-Ergebnis', output: 'Kennzahlen + Status',
+      expert: ['Kanon-Score (wichtige Hinweise), Erzähler-Hinweise, Code-Wiederholungen.',
+               'Spoiler-Anteil, Wiederholung zu den letzten 5 Folgen, Konkretheit, Stil-Abweichung zum Erzählprofil.',
+               'Lektor-Schaden und Kanon-Schaden (neue Probleme in der Zeitleiste).',
+               'Alle Werte gehen in die Qualitäts-Datenbank – zum Modellvergleich und um Drift zu sehen.'],
+      code: 'episodes._metrics() · _measure()' },
+    { id: 'freigabe', lane: 1, col: 8, type: 'security', label: 'Freigabe', sub: 'schwere Probleme', pct: null, who: 'Du',
+      simple: 'Hat der Prüfer etwas Schweres gefunden, wartet die Folge auf dich. Du liest und gibst frei.',
+      input: 'Folge mit Status „freigabe“', output: 'Freigegebene Folge',
+      expert: ['Ausgelöst durch mindestens einen Befund mit Schwere „hoch“.',
+               'Tabu- und Altersfreigabe-Warnungen blockieren nie.'],
+      code: 'episodes.produce() · needs_review' },
+    { id: 'fertig', lane: 0, col: 9, type: 'frontend', label: 'Fertig', sub: '100 %', pct: [99, 100], who: 'Du',
+      simple: 'Die Folge ist fertig und steht in deiner Geschichte.',
+      input: '–', output: 'Folge + verknüpftes Protokoll',
+      expert: ['Plan und Prüfbericht werden am Lauf gespeichert und mit der Folge verknüpft.',
+               'Protokoll: „Fertig“ (100 %)'],
+      code: 'runs.Run.finish()' },
+    { id: 'weltentw', lane: 1, col: 10, type: 'database', label: 'Weltentwicklung', sub: 'backstage', pct: null, who: 'KI-Rolle „weltenbau“',
+      simple: 'Völker, die länger nicht vorkamen, entwickeln sich im Hintergrund weiter. Davon erfährst du später in einer Geschichte.',
+      input: 'Völker ohne Auftritt in den letzten Folgen', output: 'Vorschlag mit neuen Ereignissen',
+      expert: ['Eigener KI-Lauf – erzeugt einen Vorschlag, den du entscheidest.',
+               'Höchstens 3 Völker, je 1–2 Ereignisse, Sichtbarkeit „backstage“.',
+               'Darf die Folge nie gefährden. Protokoll bei 99 %.'],
+      code: 'episodes._world_development()' },
+    { id: 'erleben', lane: 0, col: 10, type: 'external', label: 'Erleben', sub: 'lesen · hören', pct: null, who: 'Du',
+      simple: 'Lesen, im Browser vorlesen lassen, als Hörbuch vertonen (macOS-Stimmen oder TTS-Server) oder exportieren.',
+      input: 'Fertige Folge', output: 'Text, PDF, Audio, JSON',
+      expert: ['Sprecher-Segmente <code>[Name]</code> werden Stimmen zugeordnet.',
+               'Das Aussprache-Lexikon wird vor dem Sprechen angewendet.',
+               'Eigener Lauf: Stimmen (3 %), Absätze (5–90 %), Zusammenfügen (92 %).',
+               'JSON-Export zur Weiterverarbeitung in anderen Programmen.'],
+      code: 'audio.render() · audio.export_json()' }
+  ];
+
+  // Geometrie
+  var PITCH = 132, NW = 112, NH = 56, X0 = 40, LANE_Y = [36, 226], LANE_H = 168, NY = [96, 286];
+  var W = X0 + 11 * PITCH + 4, H = LANE_Y[1] + LANE_H + 12, LOW = LANE_Y[1] + LANE_H - 18;
+  var byId = {}; NODES.forEach(function (n) { byId[n.id] = n; n.x = X0 + n.col * PITCH; n.y = NY[n.lane]; n.cx = n.x + NW / 2; });
+  function N(id) { return byId[id]; }
+  var top = function (n) { return n.y; }, bot = function (n) { return n.y + NH; }, mid = function (n) { return n.y + NH / 2; };
+
+  var MAIN = ['auftrag', 'planer', 'vorbereitung', 'autor', 'pruefer', 'lektor', 'speichern', 'archivar', 'bewertung', 'fertig', 'erleben'];
+  var EDGES = [];
+  for (var i = 0; i < MAIN.length - 1; i++) {
+    var a = N(MAIN[i]), b = N(MAIN[i + 1]);
+    EDGES.push({ from: a.id, to: b.id, kind: 'emphasis', pts: [[a.x + NW, mid(a)], [b.x - 2, mid(b)]] });
+  }
+  var p = N('planer'), s = N('szenario'), v = N('vorbereitung'), np = N('neuplanen'), au = N('autor'), en = N('entwurf'),
+      bw = N('bewertung'), fg = N('freigabe'), fe = N('fertig'), we = N('weltentw');
+  var GAP = 206; // Kanal zwischen den Bahnen
+  EDGES.push(
+    { from: 'planer', to: 'szenario', kind: 'branch', label: 'mehrere', lx: p.cx + 6, ly: 222,
+      pts: [[p.cx, bot(p)], [p.cx, top(s) - 2]] },
+    { from: 'szenario', to: 'vorbereitung', kind: 'return', label: 'deine Wahl', lx: s.x + NW + 4, ly: GAP + 34,
+      pts: [[s.cx + 34, top(s)], [s.cx + 34, GAP + 30], [v.cx - 34, GAP + 30], [v.cx - 34, bot(v) + 2]] },
+    { from: 'vorbereitung', to: 'neuplanen', kind: 'error', label: 'nicht machbar', lx: v.cx + 6, ly: 252,
+      pts: [[v.cx + 10, bot(v)], [v.cx + 10, top(np) - 2]] },
+    { from: 'neuplanen', to: 'planer', kind: 'return', label: 'neuer Plan', lx: np.cx - 8, ly: LOW - 5, anchor: 'end',
+      pts: [[np.cx, bot(np)], [np.cx, LOW], [p.x - 10, LOW], [p.x - 10, bot(p) + 18], [p.cx - 30, bot(p) + 18], [p.cx - 30, bot(p) + 2]] },
+    { from: 'autor', to: 'entwurf', kind: 'error', label: 'Abbruch', lx: au.cx + 6, ly: 222,
+      pts: [[au.cx, bot(au)], [au.cx, top(en) - 2]] },
+    { from: 'bewertung', to: 'freigabe', kind: 'branch', label: 'Schwere hoch', lx: bw.cx + 6, ly: 222,
+      pts: [[bw.cx, bot(bw)], [bw.cx, top(fg) - 2]] },
+    { from: 'freigabe', to: 'fertig', kind: 'return', label: 'freigeben', lx: fg.x + NW + 6, ly: mid(fg) - 6,
+      pts: [[fg.x + NW, mid(fg)], [fe.cx - 20, mid(fg)], [fe.cx - 20, bot(fe) + 2]] },
+    { from: 'fertig', to: 'weltentw', kind: 'branch', label: 'im Hintergrund', lx: we.cx - 8, ly: GAP + 22, anchor: 'end',
+      pts: [[fe.cx + 26, bot(fe)], [fe.cx + 26, GAP - 6], [we.cx, GAP - 6], [we.cx, top(we) - 2]] }
+  );
+
+  var TOUR = ['auftrag', 'planer', 'szenario', 'vorbereitung', 'neuplanen', 'autor', 'entwurf', 'pruefer', 'lektor',
+              'speichern', 'archivar', 'bewertung', 'freigabe', 'fertig', 'weltentw', 'erleben'];
+
+  // Zeichnen
+  var NS = 'http://www.w3.org/2000/svg', svg = document.getElementById('dia');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  function el(tag, attrs, parent, text) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    (parent || svg).appendChild(e); return e;
+  }
+  var defs = el('defs', {});
+  [['default', 'm-default'], ['emphasis', 'm-emphasis'], ['error', 'm-error']].forEach(function (m) {
+    var mk = el('marker', { id: 'ah-' + m[0], viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' }, defs);
+    el('path', { d: 'M0,0 L10,5 L0,10 z', 'class': m[1] }, mk);
+  });
+  el('rect', { 'class': 'lane', x: 16, y: LANE_Y[0], width: W - 24, height: LANE_H, rx: 8 });
+  el('text', { 'class': 'lane-label', x: 30, y: LANE_Y[0] + 22 }, svg, 'Ablauf einer Folge');
+  el('rect', { 'class': 'lane exc', x: 16, y: LANE_Y[1], width: W - 24, height: LANE_H, rx: 8 });
+  el('text', { 'class': 'lane-label', x: 30, y: LANE_Y[1] + 22 }, svg, 'Abzweige und Hintergrund');
+
+  var gE = el('g', {}), gL = el('g', {}), gN = el('g', {});
+  EDGES.forEach(function (e) {
+    var d = e.pts.map(function (pt, i) { return (i ? 'L' : 'M') + pt[0] + ' ' + pt[1]; }).join(' ');
+    var mk = e.kind === 'emphasis' ? 'emphasis' : e.kind === 'error' ? 'error' : 'default';
+    e.node = el('path', { 'class': 'e ' + e.kind, d: d, 'marker-end': 'url(#ah-' + mk + ')' }, gE);
+    if (e.label) {
+      var g = el('g', { 'class': 'e-lbl' }, gL);
+      var t = el('text', { 'class': 'e-label', x: e.lx, y: e.ly, 'text-anchor': e.anchor || 'start' }, g, e.label);
+      e.lbl = g;
+      requestAnimationFrame(function () {
+        try { var b = t.getBBox(); el('rect', { 'class': 'e-label-bg', x: b.x - 3, y: b.y - 1, width: b.width + 6, height: b.height + 2, rx: 3 }, g).parentNode.insertBefore(g.lastChild, t); } catch (_) {}
+      });
+    }
+  });
+  NODES.forEach(function (n, idx) {
+    var g = el('g', { 'data-node': n.id, tabindex: '0', role: 'button', 'aria-label': n.label + ', ' + n.sub, style: 'color:var(--' + n.type + '-stroke)' }, gN);
+    el('title', {}, g, n.label + ' · ' + n.sub);
+    el('rect', { 'class': 'c-mask', x: n.x, y: n.y, width: NW, height: NH, rx: 6 }, g);
+    el('rect', { 'class': 'c-shape c-' + n.type, x: n.x, y: n.y, width: NW, height: NH, rx: 6, 'stroke-width': 1.5,
+                 'stroke-dasharray': n.lane === 1 && n.type === 'external' ? '4 3' : null }, g);
+    var step = MAIN.indexOf(n.id);
+    if (step >= 0) el('text', { 'class': 'n-num t-' + n.type, x: n.x + 8, y: n.y + 14 }, g, String(step + 1).padStart(2, '0'));
+    el('text', { 'class': 'n-label', x: n.cx, y: n.y + 30, 'text-anchor': 'middle', style: n.label.length > 12 ? 'font-size:11.5px' : '' }, g, n.label);
+    el('text', { 'class': 'n-sub', x: n.cx, y: n.y + 46, 'text-anchor': 'middle' }, g, n.sub);
+    n.g = g;
+    g.addEventListener('click', function () { stop(); select(n.id); });
+    g.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); stop(); select(n.id); } });
+  });
+  // stroke-dasharray null entfernen
+  svg.querySelectorAll('[stroke-dasharray="null"]').forEach(function (r) { r.removeAttribute('stroke-dasharray'); });
+
+  // Legende
+  var lg = document.getElementById('legend');
+  LEGEND.forEach(function (l) {
+    var s = document.createElement('span');
+    s.innerHTML = '<i style="background:var(--' + l[0] + '-fill);border-color:var(--' + l[0] + '-stroke)"></i>' + l[1];
+    lg.appendChild(s);
+  });
+
+  // Auswahl
+  var current = null;
+  var detail = document.getElementById('detail'), expertBox = document.getElementById('expertBox'),
+      simpleBox = document.getElementById('simpleBox'), count = document.getElementById('count');
+  function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); }
+  function select(id, fromSlider) {
+    var n = N(id); current = id;
+    svg.classList.add('focus');
+    NODES.forEach(function (m) { m.g.classList.toggle('on', m.id === id); m.g.setAttribute('aria-pressed', m.id === id); });
+    EDGES.forEach(function (e) {
+      var on = e.to === id || e.from === id;
+      e.node.classList.toggle('on', on);
+      if (e.lbl) e.lbl.classList.toggle('on', on);
+    });
+    var col = 'var(--' + n.type + '-stroke)';
+    detail.innerHTML =
+      '<h2>' + esc(n.label) + ' <span class="badge" style="color:' + col + ';border-color:' + col + '">' + esc(n.who) + '</span>' +
+      (n.pct ? ' <span class="pct">' + n.pct[0] + '–' + n.pct[1] + ' %</span>' : ' <span class="pct">Abzweig</span>') + '</h2>' +
+      '<p>' + esc(n.simple) + '</p>' +
+      '<div class="io"><b>Bekommt</b><span>' + esc(n.input) + '</span><b>Liefert</b><span>' + esc(n.output) + '</span></div>';
+    expertBox.innerHTML = '<h3>Details für Experten</h3><ul>' + n.expert.map(function (x) { return '<li>' + x + '</li>'; }).join('') +
+      '</ul><div class="code">Im Code: <code>' + esc(n.code) + '</code></div>';
+    simpleBox.innerHTML = document.body.dataset.mode === 'einfach'
+      ? 'Mehr Technik? Schalte oben auf <b>Experte</b>.<br><kbd>←</kbd> <kbd>→</kbd> blättern · <kbd>Leertaste</kbd> Rundgang · <kbd>T</kbd> Farbschema' : '';
+    count.textContent = (TOUR.indexOf(id) + 1) + ' / ' + TOUR.length;
+    if (!fromSlider && n.pct) { slider.value = n.pct[0]; out.textContent = n.pct[0] + ' %'; }
+  }
+  function step(d) { var i = TOUR.indexOf(current); select(TOUR[(i + d + TOUR.length) % TOUR.length]); }
+
+  // Fortschritts-Regler
+  var slider = document.getElementById('pct'), out = document.getElementById('pctOut');
+  slider.addEventListener('input', function () {
+    stop();
+    var v = +slider.value; out.textContent = v + ' %';
+    var hit = MAIN.map(N).filter(function (n) { return n.pct && v >= n.pct[0] && v <= n.pct[1]; });
+    if (hit.length) select(hit[hit.length - 1].id === 'fertig' && v < 100 ? hit[0].id : hit[hit.length - 1].id, true);
+  });
+
+  // Rundgang
+  var timer = null, playBtn = document.getElementById('play');
+  function play() {
+    if (timer) return stop();
+    if (!current || current === TOUR[TOUR.length - 1]) select(TOUR[0]);
+    playBtn.textContent = '❚❚ Pause'; playBtn.setAttribute('aria-pressed', 'true');
+    timer = setInterval(function () {
+      if (TOUR.indexOf(current) === TOUR.length - 1) return stop();
+      step(1);
+    }, 6000);
+  }
+  function stop() {
+    if (timer) clearInterval(timer); timer = null;
+    playBtn.textContent = '▶ Rundgang'; playBtn.setAttribute('aria-pressed', 'false');
+  }
+  playBtn.addEventListener('click', play);
+  document.getElementById('prev').addEventListener('click', function () { stop(); step(-1); });
+  document.getElementById('next').addEventListener('click', function () { stop(); step(1); });
+
+  // Modus
+  document.querySelectorAll('.seg button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.body.dataset.mode = b.dataset.mode;
+      document.querySelectorAll('.seg button').forEach(function (x) { x.setAttribute('aria-pressed', x === b); });
+      try { localStorage.setItem('sw-prozess-mode', b.dataset.mode); } catch (_) {}
+      if (current) select(current);
+    });
+  });
+  try {
+    var m = localStorage.getItem('sw-prozess-mode');
+    if (m === 'experte') document.querySelector('.seg button[data-mode="experte"]').click();
+  } catch (_) {}
+
+  // Theme
+  function toggleTheme() {
+    var t = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+    try { localStorage.setItem('sw-prozess-theme', t); } catch (_) {}
+  }
+  document.getElementById('theme').addEventListener('click', toggleTheme);
+
+  document.addEventListener('keydown', function (ev) {
+    if (ev.target.tagName === 'INPUT') return;
+    if (ev.key === 'ArrowRight') { stop(); step(1); }
+    else if (ev.key === 'ArrowLeft') { stop(); step(-1); }
+    else if (ev.key === ' ' && !(ev.target.closest && ev.target.closest('[data-node],button'))) { ev.preventDefault(); play(); }
+    else if (ev.key === 't' || ev.key === 'T') toggleTheme();
+    else if (ev.key === 'Escape') { stop(); svg.classList.remove('focus'); NODES.forEach(function (n) { n.g.classList.remove('on'); });
+      EDGES.forEach(function (e) { e.node.classList.remove('on'); if (e.lbl) e.lbl.classList.remove('on'); }); }
+  });
+
+  var start = new URLSearchParams(location.search).get('schritt');
+  select(byId[start] ? start : 'auftrag');
+})();
+</script>
+</body>
+</html>

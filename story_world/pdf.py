@@ -183,9 +183,10 @@ class _Doc:
 def episode_pdf(episode: dict, brand: str = "Evel • Rote Fäden") -> bytes:
     """Folge (wie episodes.get_episode) als PDF: Kopf, Erzähltext, Dialoge mit Sprechername."""
     nr, title = episode.get("release_nr"), episode.get("title") or "Folge"
-    doc = _Doc(f"{brand} · Folge {nr}: {title}")
+    label = "Geschichte" if episode.get("form") == "geschichte" else f"Folge {nr}"
+    doc = _Doc(f"{brand} · {label}: {title}")
     doc.paragraph(brand.upper(), font="H", size=8.5, leading=12, gray=0.45, justify=False, after=18)
-    doc.paragraph(f"Folge {nr}", font="H", size=11, leading=14, gray=0.35, justify=False, after=4)
+    doc.paragraph(label, font="H", size=11, leading=14, gray=0.35, justify=False, after=4)
     doc.paragraph(title, font="B", size=22, leading=27, justify=False, after=8)
     meta = [x for x in (episode.get("strang") and f"Strang: {episode['strang']}", episode.get("genre"),
                         episode.get("age_rating"), episode.get("minuten") and f"ca. {episode['minuten']} Minuten") if x]
@@ -202,4 +203,4 @@ def episode_pdf(episode: dict, brand: str = "Evel • Rote Fäden") -> bytes:
             doc.paragraph(str(seg.get("sprecher") or "").upper(), font="H", size=7.5, leading=10, indent=14, gray=0.45,
                           justify=False, after=0)
             doc.paragraph(seg["text"], indent=14, rule=True)
-    return doc.finish(f"Folge {nr}: {title}")
+    return doc.finish(f"{label}: {title}")

@@ -139,7 +139,8 @@ def render(conn: sqlite3.Connection, slug: str, episode_id: int, synth=None, voi
         run.step("Stimmen: " + ", ".join(f"{k} → {v or 'Standard'}" for k, v in mapping.items()), 3)
         with tempfile.TemporaryDirectory() as tmp:
             parts, previous = [], None
-            intro = f"Folge {ep['release_nr']}. {ep['title'] or ''}."
+            intro = (f"{ep['title'] or ''}." if ep.get("form") == "geschichte"
+                     else f"Folge {ep['release_nr']}. {ep['title'] or ''}.")
             items = [{"sprecher": episodes.NARRATOR, "typ": "narrator", "text": intro}] + segments
             for index, seg in enumerate(items):
                 path = Path(tmp) / f"{index:05d}.wav"

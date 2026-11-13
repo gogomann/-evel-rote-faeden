@@ -597,7 +597,8 @@ def plan(conn: sqlite3.Connection, episode_id: int, cfg: dict | None = None) -> 
     segmente = [dict(seg, server=sprecher[seg["sprecher"]]["server"], stimme=sprecher[seg["sprecher"]]["stimme"],
                      sprache=sprecher[seg["sprecher"]]["sprache"]) for seg in ep["segmente"]]
     used = {v["server"] for v in sprecher.values() if v["server"]}
-    return {"folge": ep["release_nr"], "titel": ep["title"], "modus": settings["modus"], "einstellung": settings,
+    return {"folge": ep["release_nr"], "titel": ep["title"], "form": ep.get("form") or "folge",
+            "modus": settings["modus"], "einstellung": settings,
             "sprecher": sprecher, "fehlt": missing, "segmente": segmente,
             "server": {sid: {"name": by_id[sid]["name"], "typ": by_id[sid]["typ"], "url": by_id[sid]["base_url"],
                              "modell": by_id[sid].get("modell") or None,
@@ -653,6 +654,52 @@ def _cached_chunk(cache: Path, s: dict, text: str, voice: str, language: str | N
     raise error
 
 
+def speak_single(segments: list, ref: str, target: Path, words: list | None = None, speak=None,
+                 cfg: dict | None = None) -> dict:
+    """Kurzen Text mit EINER Stimme vertonen (Hörbuch-Modus), z. B. die Probe einer Schreibstil-Stimme.
+    segments: Texte in Lesereihenfolge. Ein vorhandenes Ergebnis wird nach _alt verschoben, nicht überschrieben."""
+    from . import audio
+    speak = speak or synth
+    sid, voice = _split_ref(ref)
+    server = get_server(sid, cfg)
+    language = language_of(server, voice)
+    limit = int(server.get("max_zeichen") or DEFAULT_MAX_CHARS)
+    parts = [chunk_text(audio.apply_lexicon(t, words or []), limit) for t in segments if (t or "").strip()]
+    if not parts:
+        raise TTSError("Kein Text zum Vorlesen.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    cache = target.parent.parent / "_tts_cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    partial = target.with_suffix(".teil.wav")
+    writer, rate, pieces = None, None, 0
+    try:
+        for n, chunks in enumerate(parts):
+            if writer is not None and n:
+                writer.writeframes(bytes(2 * int(rate * PAUSE_SEGMENT_SAME)))
+            for index, chunk in enumerate(chunks):
+                src, samples = decode_wav(_cached_chunk(cache, server, chunk, voice, language, speak))
+                if writer is None:
+                    rate = src
+                    writer = wave.open(str(partial), "wb")
+                    writer.setnchannels(1)
+                    writer.setsampwidth(2)
+                    writer.setframerate(rate)
+                samples = resample(samples, src, rate)
+                if sys.byteorder == "big":
+                    samples.byteswap()
+                if index:
+                    writer.writeframes(bytes(2 * int(rate * PAUSE_CHUNK)))
+                writer.writeframes(samples.tobytes())
+                pieces += 1
+    finally:
+        if writer is not None:
+            writer.close()
+    _set_aside(target)
+    partial.replace(target)
+    return {"server": server.get("name"), "stimme": voice, "stimme_name": _voice_info(server, voice)["name"],
+            "stuecke": pieces, "abtastrate": rate}
+
+
 def render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | None = None, speak=None,
            cfg: dict | None = None) -> Path:
     """Folge über die TTS-Server vertonen. speak/cfg sind für Tests austauschbar."""
@@ -669,7 +716,8 @@ def render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | N
     words = audio.lexicon(conn)
     first_voice = next((p["sprecher"][seg["sprecher"]] for seg in p["segmente"] if seg["typ"] == "narrator"),
                        p["sprecher"][p["segmente"][0]["sprecher"]])
-    intro = {"sprecher": episodes.NARRATOR, "typ": "narrator", "text": f"Folge {p['folge']}. {p['titel'] or ''}.",
+    intro = {"sprecher": episodes.NARRATOR, "typ": "narrator",
+             "text": f"{p['titel'] or ''}." if p.get("form") == "geschichte" else f"Folge {p['folge']}. {p['titel'] or ''}.",
              "server": first_voice["server"], "stimme": first_voice["stimme"], "sprache": first_voice["sprache"]}
     items = []
     for seg in [intro] + p["segmente"]:

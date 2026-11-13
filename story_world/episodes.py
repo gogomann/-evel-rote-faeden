@@ -12,9 +12,10 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import difflib
 import time
 
-from . import genres, kontext, llm, pdf, profiles, providers, quality, retrieval, runs, service, timeline
+from . import genres, kontext, llm, pdf, profiles, providers, quality, retrieval, runs, service, stimmen, timeline
 
 NARRATOR = "Erzähler"
 TYPES = ("gegenwart", "rueckblende", "vorausblick", "parallel")
@@ -123,9 +124,34 @@ DRAMATURGY = """DRAMATURGIE (verbindlich für jede Folge, auch für Fortsetzunge
   hat etwas erlebt, gewonnen oder erkannt. Erst danach die Überleitung zur nächsten Folge."""
 
 
+# Form „geschichte“ (Vorgabe Ralf 2026-11-13): eigenständig erzählt für jemanden, der die Welt nicht kennt –
+# trotzdem Teil des Kanons (Archivar trägt alles ein wie bei einer Folge).
+FORMEN = {"folge": "Folge der Reihe", "geschichte": "Eigenständige Geschichte"}
+
+STORY_FORM = """FORM: EIGENSTÄNDIGE GESCHICHTE (verbindlich, geht den Folgen-Regeln vor). Sie spielt in dieser Welt und gehört
+zu ihrem Kanon, wird aber von jemandem gehört, der die Welt NICHT kennt und keine Folge gehört hat.
+- ENTRÉE: Führe in genau den Ausschnitt der Welt ein, den diese Geschichte braucht – Ort, Zeit (über Kalendernamen),
+  die wichtigen Figuren und nur die Weltprinzipien, ohne die die Handlung unverständlich wäre. Organisch über die
+  Einstiegsfigur und ihre Lage, nie als Vorrede, Lexikon oder Aufzählung. Was die Geschichte nicht braucht, bleibt weg.
+- KEIN VORWISSEN: Jede wichtige Figur, jeder Begriff, jede Technik und jedes frühere Ereignis wird beim ersten Auftreten
+  kurz verständlich gemacht. Keine Anspielungen, die nur Kenner der Reihe verstehen.
+- ABSCHLUSS: Die Geschichte endet geschlossen – der Konflikt ist gelöst oder bewusst beantwortet, die Figur hat sich
+  verändert, ein ruhiges Schlussbild. Keine Überleitung, kein Cliffhanger, kein Vorgriff auf Kommendes."""
+
+
+def _is_story(run) -> bool:
+    return getattr(run, "form", "folge") == "geschichte"
+
+
 def _style(run) -> str:
     """Grundstil + Dramaturgie + Genre-Regeln + Erzählprofil des Menschen, der gerade bedient (+ Abweichungsstufe)."""
-    parts = [STYLE, DRAMATURGY]
+    if _is_story(run):
+        parts = [STYLE.replace("eine fortlaufende Sci-Fi-Hörbuchreihe", "eine in sich abgeschlossene Sci-Fi-Hörgeschichte"),
+                 DRAMATURGY.replace(" Erst danach die Überleitung zur nächsten Folge.", " Keine Überleitung.")
+                 .replace("  Fortsetzungen verankern kurz neu, wer wir sind und wo wir stehen, bevor es weitergeht.\n", ""),
+                 STORY_FORM]
+    else:
+        parts = [STYLE, DRAMATURGY]
     level = _deviation(run)
     if level >= 2:
         parts[0] = STYLE.replace("Der Erzähler ist ehrlich: Er lügt den Hörer nicht an.",
@@ -190,6 +216,10 @@ def _ask(run: runs.Run, messages: list, task: str, json_mode: bool, low: int, hi
         if level == "info":
             run.reset_text()
         run.step(f"{label}: {text}", low if level == "info" else None, level)
+        if level == "fehler" and "Wahl fehlgeschlagen" in text:
+            _ev(run, _phase(task), "ersatzmodell", f"{label}: {text}"[:300],
+                regel="Antwortet ein Modell nicht oder mit Fehler, springt die nächste Wahl der Modellkette ein.",
+                ausgang="eingriff", call_id=getattr(run, "last_call_id", None))
 
     if chain is None:
         chain = getattr(run, "chains", {}).get(task)  # Prüfstand/Vergleich: festes Modell
@@ -218,6 +248,10 @@ def _ask_json(run, messages, task, low, high, expected, label, validate, chain=N
     if errors:
         first_model = run.model_used
         run.step(f"{label}: Antwort unvollständig ({'; '.join(errors)}) → Korrekturrunde", None, "warnung")
+        _ev(run, _phase(task), "korrektur", f"{label}: Antwort unvollständig → Korrekturrunde",
+            regel="Die Antwort muss gültiges JSON mit allen Pflichtfeldern sein. Eine Korrekturrunde ist erlaubt.",
+            ergebnis={"fehler": errors[:8], "modell": first_model}, ausgang="eingriff",
+            call_id=getattr(run, "last_call_id", None))
         messages = messages + [{"role": "assistant", "content": text},
                                {"role": "user", "content": "Fehler: " + "; ".join(errors)
                                 + "\nAntworte erneut, nur mit dem korrigierten JSON-Objekt."}]
@@ -230,8 +264,12 @@ def _ask_json(run, messages, task, low, high, expected, label, validate, chain=N
         if errors:
             run.set_response(text, run.model_used or "")  # Rohantwort bleibt für die Fehlersuche erhalten
             _note_format(run, task, label, first_model, 0.0)
+            _ev(run, _phase(task), "korrektur", f"{label}: auch nach Korrektur ungültig – Abbruch",
+                ergebnis={"fehler": errors[:8]}, ausgang="fehler", call_id=getattr(run, "last_call_id", None))
             raise EpisodeError(f"{label}: {'; '.join(errors)}")
         _note_format(run, task, label, first_model, 0.5)
+        _ev(run, _phase(task), "korrektur", f"{label}: nach Korrektur gültig", ausgang="ok",
+            call_id=getattr(run, "last_call_id", None))
         return data
     _note_format(run, task, label, run.model_used, 1.0)
     return data
@@ -240,6 +278,56 @@ def _ask_json(run, messages, task, low, high, expected, label, validate, chain=N
 def _note_format(run, task: str, label: str, model: str | None, value: float) -> None:
     """Format-Treue: 1 = sofort gültig, 0,5 = nach Korrektur, 0 = gescheitert."""
     quality.note(run, "format", task, model, value, {"schritt": label})
+
+
+# ---------------------------------------------------------------- Nachvollzug (Entscheidungsprotokoll)
+
+def _ev(run, phase: str, art: str, titel: str, **kw) -> None:
+    """Entscheidung am Lauf vermerken – nie störend für den Lauf selbst."""
+    fn = getattr(run, "decide", None)
+    if fn:
+        try:
+            fn(phase, art, titel, **kw)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _phase(task: str) -> str:
+    return runs.TASK_PHASE.get(task, task)
+
+
+def _first_models(run, tasks: tuple) -> dict:
+    out = {}
+    for task in tasks:
+        try:
+            chain = getattr(run, "chains", {}).get(task) or providers.resolve_chain(task)
+            out[task] = [_label(c) for c in chain[:3]]
+        except Exception:  # noqa: BLE001
+            out[task] = []
+    return out
+
+
+def _changed_share(before: str, after: str) -> float:
+    """Anteil geänderter Wörter (0–1) zwischen zwei Fassungen."""
+    a, b = (before or "").split(), (after or "").split()
+    if not a and not b:
+        return 0.0
+    return round(1 - difflib.SequenceMatcher(None, a, b, autojunk=False).ratio(), 4)
+
+
+_WORDISH = re.compile(r"[A-Za-zÄÖÜäöüß][\wÄÖÜäöüß-]{5,}")
+
+
+def _fix_visible(fix: dict, before: str, after: str) -> str:
+    """Schätzung per Wortabgleich: Sind neue Wörter aus dem Korrekturvorschlag im überarbeiteten Text angekommen?"""
+    wanted = {w.lower() for w in _WORDISH.findall(str(fix.get("korrektur") or ""))}
+    old = {w.lower() for w in _WORDISH.findall(before or "")}
+    new = {w.lower() for w in _WORDISH.findall(after or "")}
+    fresh = wanted - old
+    if not fresh:
+        return "nicht messbar"
+    hit = len(fresh & new) / len(fresh)
+    return "ja" if hit >= 0.5 else "teilweise" if hit >= 0.2 else "nein"
 
 
 # ---------------------------------------------------------------- 1. Planer
@@ -417,6 +505,12 @@ def _theme(conn, run, task: str, chain=None) -> dict:
 
 def _plan_task(conn, run, wish: str, thread_id: int | None) -> str:
     task = "Plane die nächste Folge."
+    if _is_story(run):
+        task = ("Plane eine EIGENSTÄNDIGE GESCHICHTE aus dieser Welt (siehe FORM). Sie knüpft nicht an die letzte Folge an "
+                "und setzt kein Vorwissen voraus, wird aber wie jede Folge Teil des Kanons. Zusätzliches Feld "
+                "\"entree\": Liste der Weltdetails (Ort, Zeit, Figuren, Begriffe, Prinzipien), die der Hörer für genau "
+                "diese Geschichte kennen muss – nur diese, je mit einem Halbsatz, wie sie eingeführt werden. "
+                "\"ende_uebergabe\" beschreibt hier das geschlossene Schlussbild, keine Überleitung.")
     if thread_id:
         task += f" Sie soll im Strang mit id {thread_id} spielen."
     if not getattr(run, "genre_rules", ""):
@@ -567,13 +661,23 @@ def _write_chapter(conn, run, plan, cast, index, previous_text, low, high) -> st
     opening = ""
     if index == 0:
         opening = "\n" + _opening_brief(plan)
-        if history and history[-1].get("end_handoff"):
+        if _is_story(run):
+            entree = plan.get("entree") if isinstance(plan.get("entree"), list) else []
+            opening += ("\nENTRÉE FÜR NEULINGE (bis zum Ende dieses Kapitels organisch und verständlich eingeführt, "
+                        "nicht mehr): " + ("; ".join(str(x) for x in entree) if entree else
+                                           "Ort, Zeit und die wichtigen Figuren dieser Geschichte"))
+        elif history and history[-1].get("end_handoff"):
             opening += ("\nDie letzte Folge endete so (nach dem Einstieg inhaltlich aufgreifen, Überlappung erwünscht): "
                         f"{history[-1]['end_handoff']}")
     if index == len(plan["kapitel"]) - 1:
-        opening += ("\nDIES IST DAS LETZTE KAPITEL – ENDE: Runde den Bogen dieser Folge spürbar ab"
-                    + (f" ({plan['ende_abschluss']})" if plan.get("ende_abschluss") else "")
-                    + ", erst danach die Überleitung zur nächsten Folge.")
+        if _is_story(run):
+            opening += ("\nDIES IST DAS LETZTE KAPITEL – ABSCHLUSS DER GESCHICHTE: Konflikt lösen oder bewusst beantworten"
+                        + (f" ({plan['ende_abschluss']})" if plan.get("ende_abschluss") else "")
+                        + ", ruhiges Schlussbild. Keine Überleitung, kein Cliffhanger, nichts offen für eine Fortsetzung.")
+        else:
+            opening += ("\nDIES IST DAS LETZTE KAPITEL – ENDE: Runde den Bogen dieser Folge spürbar ab"
+                        + (f" ({plan['ende_abschluss']})" if plan.get("ende_abschluss") else "")
+                        + ", erst danach die Überleitung zur nächsten Folge.")
     outline = "\n".join(f"{i + 1}. [{k.get('teil') or '–'}] {k.get('titel', '')}: {k.get('inhalt', '')}"
                         for i, k in enumerate(plan["kapitel"]))
     when = "; ".join(f"{c['kalender']}: {c['text']}" for c in timeline.format_all(conn, float(plan["welt_start"]), True)
@@ -587,11 +691,12 @@ def _write_chapter(conn, run, plan, cast, index, previous_text, low, high) -> st
         then += ("\nWELTZUSTAND ZU BEGINN DIESER FOLGE (nur das galt damals; späteres Wissen darf nicht vorkommen):\n"
                 + json.dumps({k: state[k] for k in ("figuren", "ereignisse", "beziehungen", "technik")},
                              ensure_ascii=False))
-    task = (f"FOLGE: {plan.get('titel', '')} (Typ: {plan.get('typ')}, Weltzeit {plan.get('welt_start')}–{plan.get('welt_ende')})\n"
+    task = (f"{'GESCHICHTE' if _is_story(run) else 'FOLGE'}: {plan.get('titel', '')} (Typ: {plan.get('typ')}, "
+            f"Weltzeit {plan.get('welt_start')}–{plan.get('welt_ende')})\n"
             f"FIGUREN: {json.dumps(cast, ensure_ascii=False)}\n"
             f"KAPITELPLAN:\n{outline}\n"
             f"ANDEUTUNGEN (nur andeuten, nie auflösen): {plan.get('andeutungen', '')}\n"
-            f"ENDE DER FOLGE: {plan.get('ende_uebergabe', '')}\n{opening}\n"
+            f"{'SCHLUSSBILD' if _is_story(run) else 'ENDE DER FOLGE'}: {plan.get('ende_uebergabe', '')}\n{opening}\n"
             f"ZEITANGABE FÜR DEN ERZÄHLER: {when}{then}\n\n"
             f"BISHERIGER TEXT (Ende):\n{previous_text[-3000:] if previous_text else '(Beginn der Folge)'}\n\n"
             f"SCHREIBE JETZT Kapitel {index + 1} von {len(plan['kapitel'])}: „{chapter.get('titel', '')}“ – "
@@ -618,12 +723,22 @@ def _write_chapter(conn, run, plan, cast, index, previous_text, low, high) -> st
                               max_tokens=max(4000, int(words * 2.6)), chain=chain or None))
         refusal = _refusal(text)
         quality.note(run, "verweigerung", "autor", run.model_used, 1.0 if refusal else 0.0, {"schritt": label})
+        rule = "Angenommen, wenn mindestens 35 % der Zielwörter und keine Verweigerung."
         if word_count(text) >= words * 0.35 and not refusal:
             run.step(f"{label}: {word_count(text):,} Wörter geschrieben".replace(",", "."), high, "ok")
+            _ev(run, "autor", "bewertung", f"Kapitel {index + 1}: {word_count(text):,} Wörter (Ziel {words:,})"
+                .replace(",", "."), regel=rule, ausgang="ok", call_id=getattr(run, "last_call_id", None),
+                eingaben={"kapitel": index + 1, "titel": chapter.get("titel", ""), "ziel_woerter": words},
+                ergebnis={"woerter": word_count(text), "laenge_quote": round(word_count(text) / max(1, words), 2),
+                          "modell": run.model_used, "versuch": attempt}, backstage=False)
             quality.note(run, "laenge", "autor", run.model_used, round(word_count(text) / max(1, words), 3),
                          {"schritt": label, "ziel": words})
             return text
         used = run.model_used or "?"
+        _ev(run, "autor", "eingriff", f"Kapitel {index + 1}: " + ("Modell verweigert den Inhalt" if refusal else
+            f"zu kurz ({word_count(text)} von {words} Wörtern)") + " → neuer Versuch", regel=rule, ausgang="eingriff",
+            call_id=getattr(run, "last_call_id", None),
+            ergebnis={"modell": used, "woerter": word_count(text), "verweigerung": refusal, "versuch": attempt})
         if refusal:
             refused.add(used)
             others = [c for c in full if _label(c) not in refused]
@@ -676,6 +791,9 @@ def _checker_chain(run) -> list:
     other = [c for c in chain if f"{c[0]['name']} · {c[1]}" != author]
     if chain and not other:
         run.step("Prüfer nutzt dasselbe Modell wie der Autor – unter „Modelle je Aufgabe“ ein anderes wählen", None, "warnung")
+        _ev(run, "pruefer", "warnung", "Prüfer nutzt dasselbe Modell wie der Autor",
+            regel="Der Prüfer soll ein anderes Modell als der Autor sein (unabhängiger Blick).", ausgang="warnung",
+            ergebnis={"autor": author})
     return other + [c for c in chain if c not in other]
 
 
@@ -685,7 +803,16 @@ def _check(conn, run, plan, chapters) -> list:
     handoff = history[-1].get("end_handoff") if history else None
     auto = timeline.check(conn, reveal=True)["probleme"]
     extra = (f"\n\nÜBERGABE: Die vorige Folge endete so – Kapitel 1 soll daran inhaltlich anknüpfen: {handoff}"
-             if handoff else "")
+             if handoff and not _is_story(run) else "")
+    if _is_story(run):
+        entree = plan.get("entree") if isinstance(plan.get("entree"), list) else []
+        extra += ("\n\nFORM: EIGENSTÄNDIGE GESCHICHTE für Hörer ohne Vorwissen – eine Anknüpfung an frühere Folgen ist NICHT "
+                  "nötig. Prüfe zusätzlich: Setzt der Text Wissen über die Welt, Figuren, Begriffe oder frühere Ereignisse "
+                  "voraus, ohne es zu erklären? Melde jede Stelle als „mittel“, Beschreibung beginnt mit „Neuling:“, "
+                  "Korrektur = knappe, organische Erklärung beim ersten Auftreten. Wird zu viel Welt erklärt, die die "
+                  "Geschichte nicht braucht, „niedrig“ mit „Neuling: zu viel“. Endet die Geschichte offen, mit Überleitung "
+                  "oder Cliffhanger, melde „mittel“ mit „Ende:“."
+                  + ("\nGEPLANTES ENTRÉE: " + "; ".join(str(x) for x in entree) if entree else ""))
     extra += ("\n\nAUTOMATISCHE PRÜFUNG (Kanon-Daten):\n" + "\n".join(f"- {i['figur']} {i['text']}" for i in auto)
               if auto else "")
     if getattr(run, "genre_rules", ""):
@@ -694,7 +821,9 @@ def _check(conn, run, plan, chapters) -> list:
     if getattr(run, "age_rating", ""):
         extra += (f"\n\nALTERSFREIGABE (vom Autor festgelegt): {run.age_rating}. Nicht neu bewerten; passt etwas "
                   "deutlich nicht dazu, höchstens als „mittel“ melden, Beschreibung beginnt mit „Altersfreigabe:“.")
-    if getattr(run, "voice", ""):
+    if getattr(run, "stimme", None):
+        extra += "\n\n" + run.voice_check
+    elif getattr(run, "voice", ""):
         extra += ("\n\n" + run.voice + "\nWeicht der Stil deutlich vom Erzählprofil ab, als „niedrig“ oder „mittel“ "
                   "melden (Kategorie „Stil“).")
     extra += _deviation_check_note(run, plan)
@@ -725,6 +854,8 @@ EDITOR_PROMPT = """Du bist der Lektor einer fortlaufenden Hörbuchreihe und sorg
 Inhalt und Länge im Wesentlichen erhalten. Format beibehalten: jeder Absatz beginnt mit [Sprecher].
 Steht unter den Korrekturen „Einstieg:“, schreibe die ersten Absätze neu, sodass sie den Hörer abholen (Figur, Alter/Rolle,
 Gefühl, Lage, Ort) – der bisherige Anfang darf danach folgen oder gekürzt werden. Bei „Ende:“ runde das Kapitelende ab.
+Bei „Neuling:“ mache Figur, Begriff oder Ereignis beim ersten Auftreten knapp und organisch verständlich (kein Lexikon-Ton);
+bei „Neuling: zu viel“ kürze Welterklärungen, die die Geschichte nicht braucht.
 Antworte nur mit dem überarbeiteten Kapiteltext."""
 
 
@@ -790,11 +921,14 @@ PLAN_ATTEMPTS = 2  # Planer-Durchläufe, wenn die Vorbereitung den Strang nicht 
 def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = None, words: int | None = None,
             job_id: int | None = None, genre_id: int | None = None, profile_id: str | None = None,
             age_rating: str | None = None, abweichung: int | None = None, szenarien_anzahl: int | None = None,
-            scenario_set_id: int | None = None, scenario_nr: int | None = None) -> int | None:
+            scenario_set_id: int | None = None, scenario_nr: int | None = None,
+            stimme_id: str | None = None, form: str = "folge") -> int | None:
     """Erzeugt eine Folge. Gibt die Folgen-id zurück – oder None, wenn Szenarien auf die Wahl des Menschen warten."""
     from . import szenarien
     words = int(words or service.setting(conn, "folge_woerter"))
-    auftrag = f"Neue Folge erzeugen (Ziel ca. {words} Wörter ≈ {round(words / WORDS_PER_MINUTE)} Minuten)"
+    form = form if form in FORMEN else "folge"
+    auftrag = (f"Neue {'eigenständige Geschichte' if form == 'geschichte' else 'Folge'} erzeugen "
+               f"(Ziel ca. {words} Wörter ≈ {round(words / WORDS_PER_MINUTE)} Minuten)")
     if thread_id:
         auftrag += f"\nStrang: #{thread_id}"
     if wish.strip():
@@ -802,7 +936,9 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
     if age_rating:
         auftrag += f"\nAltersfreigabe (Autor): {age_rating.strip()[:40]}"
     conn.commit()  # Protokoll schreibt über eine eigene Verbindung
-    run = runs.Run(conn, "Folge", wish.strip()[:80] or "nächste Folge", "planer", auftrag, job_id=job_id)
+    run = runs.Run(conn, "Folge", (wish.strip()[:80] or ("eigenständige Geschichte" if form == "geschichte"
+                                                          else "nächste Folge")), "planer", auftrag, job_id=job_id)
+    run.form = form
     run.model_used = None
     run.models = {}
     run.qa = []
@@ -811,7 +947,15 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
     except Exception:  # noqa: BLE001 – Messung ist Beiwerk
         problems_before = None
     profile = profiles.get(profile_id or service.meta(conn).get("nutzer_id"))
-    run.voice = profiles.style_block(profile)
+    voice, voice_src = stimmen.resolve(conn, stimme_id, thread_id)
+    run.stimme, run.stimme_quelle = voice, voice_src
+    if voice:  # Stimme (virtueller Autor) bestimmt den Stil; das Erzählprofil nur noch Publikum, Genres, Tabus
+        audience = profiles.audience_block(profile)
+        run.voice = stimmen.writer_block(voice) + (("\n\n" + audience) if audience else "")
+        run.voice_check = stimmen.checker_block(voice)
+    else:
+        run.voice = profiles.style_block(profile)
+        run.voice_check = run.voice
     run.genre_id = genres.resolve(conn, genre_id, thread_id)
     run.genre_rules = genres.rules_text(conn, run.genre_id)
     run.age_rating = (age_rating or "").strip()[:40]
@@ -823,7 +967,34 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
     episode_id = None
     set_id = scenario_set_id
     try:
-        run.step("Auftrag angenommen" + (f" – Erzählprofil: {profile['name']}" if run.voice else " – ohne Erzählprofil")
+        for src, vid in stimmen.dangling(conn, stimme_id, thread_id):
+            run.step(f"Stimme {vid} ({src}) gibt es auf diesem Rechner nicht – Welt mit Stimmen exportieren und "
+                     "importieren (Einstellungen → Sicherung)", None, "warnung")
+            _ev(run, "auftrag", "warnung", f"Stimme {vid} ({src}) fehlt auf diesem Rechner", ausgang="warnung",
+                regel="Eine Welt verweist auf eine Stimme, die hier nicht vorhanden ist – die Folge wird ohne sie geschrieben.")
+        tasks = ("planer", "autor", "pruefer", "lektor", "archivar") + (("erwartung", "bewerter") if story["szenarien"] > 1
+                                                                       and not scenario_set_id else ())
+        _ev(run, "auftrag", "gewichtung", "Vorgaben und Gewichtung dieser Folge", ausgang="info",
+            eingaben={"wunsch": wish.strip(), "ziel_woerter": words, "minuten": round(words / WORDS_PER_MINUTE),
+                      "strang": thread_id, "genre": run.genre_rules.splitlines()[0][7:] if run.genre_rules else None,
+                      "genre_vorgabe": bool(genre_id), "form": FORMEN[form],
+                      "stimme": dict(stimmen.summary(voice), quelle=voice_src) if voice else None,
+                      "erzaehlprofil": profile["name"] if profile else None,
+                      "altersfreigabe": run.age_rating or None,
+                      "ueberraschung": {"stufe": story["abweichung"], "quelle": story["quelle"], "ziel": story["ziel"]},
+                      "szenarien": {"anzahl": story["szenarien"], "wahl": story["wahl"] or "automatisch",
+                                    "min_kanon": story["min_kanon"]},
+                      "kontext": run.kontext or "voll", "modelle": _first_models(run, tasks)},
+            regel=((f"Stimme „{voice['name']}“ kommt aus „{voice_src}“ (Folge vor Geschichte vor Welt) und gibt Planer, "
+                    "Autor, Lektor den Stil und dem Prüfer den Maßstab. ") if voice else
+                   "Keine Stimme gewählt – Stil aus dem Erzählprofil, falls ausgewertet. ")
+                  + (f"Überraschungsstufe {story['abweichung']} kommt aus „{story['quelle']}“ (Folge vor Strang vor Genre "
+                   f"vor Welt) und setzt das Ziel {story['ziel']:g}/10. Länge: {words} Wörter ≈ "
+                   f"{round(words / WORDS_PER_MINUTE)} Minuten bei {WORDS_PER_MINUTE} Wörtern pro Minute."))
+        run.step("Auftrag angenommen" + (" – eigenständige Geschichte" if form == "geschichte" else "")
+                 + (f" – Stimme: {voice['name']} ({voice_src})" if voice else
+                                         f" – Erzählprofil: {profile['name']}" if run.voice and profile else
+                                         " – ohne Erzählprofil")
                  + (f", Genre: {run.genre_rules.splitlines()[0][7:]}" if run.genre_rules else "")
                  + (f", Altersfreigabe (Autor): {run.age_rating}" if run.age_rating else "")
                  + (f", Überraschung Stufe {story['abweichung']} ({story['quelle']})" if story["abweichung"] else "")
@@ -832,10 +1003,14 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
             plan = szenarien.take(conn, scenario_set_id, int(scenario_nr or 1))
             run.abweichung = int(plan.get("abweichung") or run.abweichung)
             run.step(f"Szenario {scenario_nr} aus deiner Wahl übernommen", 12, "ok")
+            _ev(run, "szenario", "entscheidung", f"Du hast Szenario {scenario_nr} „{plan.get('titel', '')}“ gewählt",
+                ausgang="mensch", ergebnis={"szenario_satz": scenario_set_id, "nr": scenario_nr})
         elif story["szenarien"] > 1:
             plan, set_id = szenarien.run_flow(conn, run, wish, thread_id, words, story)
             if plan is None:
                 run.step("Szenarien warten auf deine Wahl → Seite „Geschichten“", 100, "warnung")
+                _ev(run, "szenario", "entscheidung", "Szenarien warten auf deine Wahl (Seite „Geschichten“)",
+                    ausgang="mensch", ergebnis={"szenario_satz": set_id})
                 run.finish("fertig")
                 return None
             run.abweichung = int(plan.get("abweichung") or run.abweichung)
@@ -844,6 +1019,14 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
         for attempt in range(1, PLAN_ATTEMPTS + 1):
             run.wendung = str(plan.get("wendung") or "") if run.abweichung >= 2 else ""
             run.step(f"Plan: „{plan.get('titel', '')}“ – {len(plan['kapitel'])} Kapitel, Typ {plan['typ']}", 12, "ok")
+            _ev(run, "planer", "frage", f"Plan „{plan.get('titel', '')}“ – {len(plan['kapitel'])} Kapitel, Typ {plan['typ']}",
+                ausgang="ok", backstage=True, call_id=getattr(run, "last_call_id", None) if attempt > 1 or not (scenario_set_id or story["szenarien"] > 1) else None,
+                regel="Plan wird per Code geprüft (Pflichtfelder, Typ, Weltzeit, Figuren) – nur gültige Pläne gehen weiter.",
+                ergebnis={"titel": plan.get("titel"), "typ": plan.get("typ"), "idee": plan.get("idee"),
+                          "einstieg": plan.get("einstieg"), "wendung": plan.get("wendung"),
+                          "kapitel": [k.get("titel") for k in plan["kapitel"] if isinstance(k, dict)],
+                          "weltzeit": [plan.get("welt_start"), plan.get("welt_ende")],
+                          "ende": plan.get("ende_uebergabe"), "entree": plan.get("entree"), "versuch": attempt})
             try:
                 refs, thread = _apply_preparation(conn, run, plan)
                 break
@@ -852,6 +1035,9 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
                     raise EpisodeError(f"Der geplante Strang ließ sich auch nach {attempt} Versuchen nicht anlegen: {exc}")
                 run.step(f"Plan nicht ausführbar ({exc}) – Vorbereitung zurückgenommen, Planer plant neu "
                          f"(Versuch {attempt + 1}/{PLAN_ATTEMPTS})", 13, "warnung")
+                _ev(run, "vorbereitung", "eingriff", "Plan nicht ausführbar → Vorbereitung zurückgenommen, neu planen",
+                    regel=f"Lässt sich der Strang nicht anlegen, plant der Planer neu (höchstens {PLAN_ATTEMPTS} Durchläufe).",
+                    ergebnis={"grund": str(exc), "versuch": attempt + 1}, ausgang="eingriff")
                 set_id = None  # neuer Plan gehört nicht mehr zum Szenario-Satz
                 plan = _plan(conn, run, wish, thread_id, words,
                              extra_task=f"\nDER VORIGE PLAN WAR NICHT AUSFÜHRBAR: {exc}. Plane neu und behebe das.")
@@ -861,12 +1047,23 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
             run.genre_rules = genres.rules_text(conn, run.genre_id)
             if run.genre_rules:
                 run.step(f"Genre gewählt: {run.genre_rules.splitlines()[0][7:]}", 15)
+                _ev(run, "vorbereitung", "gewichtung", f"Genre vom Planer gewählt: {run.genre_rules.splitlines()[0][7:]}",
+                    regel="Ohne Vorgabe wählt der Planer das Genre; die Geschichte behält es für alle Folgen.",
+                    ausgang="info")
         if run.genre_id:  # neue Geschichte behält ihr Genre für die nächsten Folgen
             conn.execute("UPDATE threads SET genre_id = ? WHERE id = ? AND genre_id IS NULL", (run.genre_id, thread))
             conn.commit()
+        if voice and voice_src == "Folge":  # … und ihre Stimme, wenn sie noch keine hat
+            try:
+                conn.execute("UPDATE threads SET stimme_id = ? WHERE id = ? AND stimme_id IS NULL", (voice["id"], thread))
+                conn.commit()
+            except sqlite3.Error:
+                pass
         plan["_thread_id"] = thread
         cast = _cast(conn, plan, refs)
         run.step(f"Strang #{thread}, {len(cast)} Figuren besetzt", 15)
+        _ev(run, "vorbereitung", "weiterleitung", f"Strang #{thread}, {len(cast)} Figuren besetzt", ausgang="ok",
+            ergebnis={"strang": thread, "figuren": [c.get("name") for c in cast if isinstance(c, dict)]})
 
         total = len(plan["kapitel"])
         span = 60 / total
@@ -877,9 +1074,15 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
         drafts = list(chapters)  # Autorfassung – für die Messung des Lektor-Schadens
         issues: list = []
         try:
-            issues = _soften(_check(conn, run, plan, chapters))
+            raw = _check(conn, run, plan, chapters)
+            check_call = getattr(run, "last_call_id", None)
+            before = [p.get("schwere") if isinstance(p, dict) else None for p in raw]
+            issues = _soften(raw)
+            _log_findings(run, issues, before, check_call)
         except (EpisodeError, llm.LLMError) as exc:
             run.step(f"Prüfer übersprungen: {exc}", 82, "warnung")
+            _ev(run, "pruefer", "warnung", "Prüfer übersprungen – Folge ungeprüft weitergeleitet", ausgang="warnung",
+                ergebnis={"grund": str(exc)})
 
         span = 10 / total
         for index in range(total):
@@ -887,8 +1090,11 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
             low = int(82 + span * index)
             try:
                 chapters[index] = _edit(run, chapters[index], mine, index, total, low, int(low + span))
+                _log_edit(run, index, drafts[index], chapters[index], mine)
             except EpisodeError as exc:
                 run.step(f"Lektor Kapitel {index + 1} übersprungen: {exc}", None, "warnung")
+                _ev(run, "lektor", "warnung", f"Kapitel {index + 1}: Lektor übersprungen – Autorfassung bleibt",
+                    ausgang="warnung", ergebnis={"grund": str(exc), "korrekturen_offen": len(mine)})
         run.step("Lektorat abgeschlossen", 92, "ok")
 
         text = "\n\n".join(chapters)
@@ -899,21 +1105,45 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
             conn.commit()
         run.step(f"Folge #{episode_id} gespeichert: {word_count(text):,} Wörter ≈ "
                  f"{round(word_count(text) / WORDS_PER_MINUTE)} Minuten".replace(",", "."), 93, "ok")
+        _ev(run, "speichern", "weiterleitung", f"Folge #{episode_id} gespeichert", ausgang="ok",
+            ergebnis={"folge": episode_id, "woerter": word_count(text),
+                      "minuten": round(word_count(text) / WORDS_PER_MINUTE), "status": "fertig (vorläufig)"})
 
         archive = None
         try:
             archive = _archive(conn, run, plan, text)
+            ops = archive.get("operationen") or []
+            kinds: dict = {}
+            for op in ops:
+                if isinstance(op, dict):
+                    key = f"{op.get('aktion') or op.get('op') or '?'} {op.get('tabelle') or op.get('table') or ''}".strip()
+                    kinds[key] = kinds.get(key, 0) + 1
+            _ev(run, "archivar", "frage", f"Archivar: {len(ops)} Kanon-Einträge, {len(archive.get('ripples') or [])} Ripples",
+                ausgang="ok", backstage=True, call_id=getattr(run, "last_call_id", None),
+                ergebnis={"zusammenfassung": archive.get("folgen_zusammenfassung"), "operationen": kinds,
+                          "ende_uebergabe": archive.get("ende_uebergabe"), "raetsel": archive.get("raetsel_status"),
+                          "rueckfragen": archive.get("rueckfragen")})
             _apply_archive(conn, run, archive, plan, thread, episode_id)
         except (EpisodeError, llm.LLMError, service.ValidationError) as exc:
             conn.commit()
             run.step(f"Archivar übersprungen: {exc} – Folge bleibt erhalten", None, "warnung")
+            _ev(run, "archivar", "warnung", "Archivar übersprungen – Folge bleibt erhalten, Kanon unverändert",
+                ausgang="warnung", ergebnis={"grund": str(exc)})
 
         metrics = _metrics(issues, archive, conn, episode_id)
         metrics["qualitaet"] = _measure(conn, run, episode_id, text, drafts, chapters, profile, problems_before)
+        _log_metrics(run, metrics)
         if metrics["warnungen"]:
             run.step(f"{len(metrics['warnungen'])} Warnung(en) zu Tabu/Altersfreigabe an der Folge vermerkt "
                      "(blockiert nichts)", None, "warnung")
         needs_review = any(isinstance(p, dict) and p.get("schwere") == "hoch" for p in issues)
+        counts = {k: sum(1 for p in issues if isinstance(p, dict) and p.get("schwere") == k)
+                  for k in ("hoch", "mittel", "niedrig")}
+        _ev(run, "bewertung", "entscheidung",
+            "Freigabe nötig – Folge wartet auf dich" if needs_review else "Kein Befund „hoch“ → fertig, ohne deine Freigabe",
+            regel="Mindestens ein Prüfer-Befund mit Schwere „hoch“ → Folge wartet auf deine Freigabe. "
+                  "Tabu- und Altersfreigabe-Hinweise blockieren nie.",
+            ergebnis=dict(counts, warnungen=len(metrics["warnungen"])), ausgang="mensch" if needs_review else "ok")
         conn.execute("UPDATE episodes SET metrics = ?, status = ? WHERE id = ?",
                      (json.dumps(metrics, ensure_ascii=False), "freigabe" if needs_review else "fertig", episode_id))
         conn.commit()
@@ -922,9 +1152,12 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
         try:
             _world_development(conn, plan, text)
             run.step("Weltentwicklung abwesender Völker angestoßen (eigener KI-Lauf)", 99, "ok")
+            _ev(run, "weltentwicklung", "weiterleitung", "Weltentwicklung angestoßen (eigener Lauf)", ausgang="info")
         except Exception as exc:  # optional: darf die Folge nie gefährden
             conn.commit()
             run.step(f"Weltentwicklung übersprungen: {exc}", None, "warnung")
+            _ev(run, "weltentwicklung", "warnung", "Weltentwicklung übersprungen", ausgang="warnung",
+                ergebnis={"grund": str(exc)})
 
         run.set_response(json.dumps({"plan": plan, "pruefung": issues}, ensure_ascii=False, indent=1),
                          run.model_used or "")
@@ -943,11 +1176,81 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
                 if thread:
                     episode_id = _save(conn, plan, thread, "\n\n".join(chapters), [], run, status="entwurf")
                     run.step(f"Bisheriger Text als Entwurf #{episode_id} gesichert", None, "warnung")
+                    _ev(run, "speichern", "eingriff", f"Abbruch – bisheriger Text als Entwurf #{episode_id} gesichert",
+                        ausgang="eingriff", ergebnis={"folge": episode_id, "kapitel": len(chapters)})
             except Exception:  # Sicherung darf den eigentlichen Fehler nicht verdecken
                 pass
         run.step(f"Abgebrochen: {exc}", None, "fehler")
+        _ev(run, "abbruch", "fehler", f"Abgebrochen: {exc}"[:300], ausgang="fehler")
         run.finish("fehler", error=str(exc)[:1000])
         raise
+
+
+def _log_findings(run, issues: list, before: list, call_id) -> None:
+    rule = ("hoch → Folge wartet auf deine Freigabe · mittel/niedrig → Korrektur geht an den Lektor · "
+            "Tabu/Altersfreigabe → nur Warnung, höchstens „mittel“")
+    if not issues:
+        _ev(run, "pruefer", "pruefung", "Keine Probleme gefunden – unverändert weitergeleitet", regel=rule,
+            ausgang="ok", call_id=call_id)
+        return
+    for n, (p, orig) in enumerate(zip(issues, before), 1):
+        if not isinstance(p, dict):
+            continue
+        sev = p.get("schwere") or "?"
+        outcome = "warnung" if p.get("warnung") or sev == "niedrig" else "eingriff"
+        title = f"Befund {n}: {sev}, Kapitel {p.get('kapitel', '?')}"
+        if orig and orig != sev:
+            title += f" (abgeschwächt von {orig})"
+        _ev(run, "pruefer", "pruefung", title, regel=rule, ausgang=outcome, call_id=call_id, backstage=True,
+            ergebnis={"schwere": sev, "schwere_original": orig, "kapitel": p.get("kapitel"),
+                      "beschreibung": p.get("beschreibung"), "korrektur": p.get("korrektur"),
+                      "nur_warnung": bool(p.get("warnung"))})
+
+
+def _log_edit(run, index: int, before: str, after: str, fixes: list) -> None:
+    share = _changed_share(before, after)
+    checks = [{"beschreibung": f.get("beschreibung"), "korrektur": f.get("korrektur"),
+               "im_text_erkennbar": _fix_visible(f, before, after)} for f in fixes if isinstance(f, dict)]
+    missing = [c for c in checks if c["im_text_erkennbar"] == "nein"]
+    outcome = "warnung" if fixes and (share < 0.005 or missing) else "eingriff" if fixes else "ok"
+    title = (f"Kapitel {index + 1}: {len(fixes)} Korrektur(en) eingearbeitet, {share * 100:.1f} % des Textes geändert"
+             if fixes else f"Kapitel {index + 1}: Stil geglättet, {share * 100:.1f} % des Textes geändert")
+    if missing:
+        title += f" – {len(missing)} Korrektur(en) nicht erkennbar"
+    _ev(run, "lektor", "eingriff" if fixes else "weiterleitung", title, ausgang=outcome, backstage=bool(fixes),
+        call_id=getattr(run, "last_call_id", None),
+        regel="Korrekturen des Prüfers einarbeiten und Stil vereinheitlichen – immer dasselbe Modell; eine geplante "
+              "Wendung wird nicht geglättet. „Im Text erkennbar“ ist eine Schätzung per Wortabgleich.",
+        ergebnis={"geaendert_anteil": share, "woerter_vorher": word_count(before), "woerter_nachher": word_count(after),
+                  "wendung_geschuetzt": bool(getattr(run, "wendung", "")), "korrekturen": checks})
+
+
+QUALITY_SHOWN = ("format", "spoiler", "wiederholung", "konkretheit", "stil", "lektor_schaden", "kanon_schaden")
+
+
+def _log_metrics(run, metrics: dict) -> None:
+    q = metrics.get("qualitaet") or {}
+    for test in QUALITY_SHOWN:
+        value = q.get(test)
+        if isinstance(value, list):
+            value = round(sum(value) / len(value), 3) if value else None
+        if value is None:
+            continue
+        spec = quality.TESTS.get(test, {})
+        verdict = quality.judge(test, value)
+        better = {"hoch": "höher ist besser", "niedrig": "niedriger ist besser", "eins": "nahe 1 ist besser"}.get(
+            spec.get("besser"), "")
+        rule = f"{better}, Grenze {spec.get('grenze')}" if spec.get("grenze") is not None else better or None
+        if test == "stil" and getattr(run, "stil_massstab", None):
+            rule = f"{rule} · gemessen gegen: {run.stil_massstab} (Satzlänge und Dialoganteil)"
+        _ev(run, "bewertung", "bewertung", f"{spec.get('label', test)}: {quality.fmt(test, value)}",
+            regel=rule,
+            ergebnis={"test": test, "wert": value, "grenze": spec.get("grenze"), "urteil": verdict},
+            ausgang="ok" if verdict == "ok" else "warnung" if verdict == "warnung" else "info")
+    _ev(run, "bewertung", "bewertung", f"Kanon-Score {metrics.get('kanon_score', 0)} (wichtige Prüfer-Hinweise), "
+        f"{metrics.get('erzaehler', 0)} Erzähler-Hinweise", ausgang="ok" if not metrics.get("kanon_score") else "warnung",
+        regel="Zählt Befunde mit Schwere hoch oder mittel – 0 ist das Ziel.",
+        ergebnis={k: metrics.get(k) for k in ("kanon_score", "hinweise", "erzaehler", "code_wiederholungen", "warn_arten")})
 
 
 def _save(conn, plan, thread_id, text, issues, run, status) -> int:
@@ -967,6 +1270,13 @@ def _save(conn, plan, thread_id, text, issues, run, status) -> int:
         conn.execute("UPDATE episodes SET genre_id = ? WHERE id = ?", (run.genre_id, cur.lastrowid))
     if getattr(run, "age_rating", ""):
         conn.execute("UPDATE episodes SET age_rating = ? WHERE id = ?", (run.age_rating, cur.lastrowid))
+    if getattr(run, "form", "folge") != "folge":
+        conn.execute("UPDATE episodes SET form = ? WHERE id = ?", (run.form, cur.lastrowid))
+    if getattr(run, "stimme", None):
+        try:
+            conn.execute("UPDATE episodes SET stimme_id = ? WHERE id = ?", (run.stimme["id"], cur.lastrowid))
+        except sqlite3.Error:
+            pass
     service.audit(conn, "ki", "folge", "episodes", cur.lastrowid, detail=plan.get("titel"))
     conn.commit()
     return cur.lastrowid
@@ -1023,7 +1333,7 @@ def _apply_archive(conn, run, archive, plan, thread_id, episode_id) -> None:
                    "rueckfragen": archive.get("rueckfragen") or []}
         pid = service.store_proposal(conn, f"Archivar: Folge #{episode_id}", payload, run.model_used)
         conn.commit()
-        llm.maybe_auto_apply(conn, pid, payload, run)
+        llm.maybe_auto_apply(conn, pid, payload, run, phase="archivar")
         conn.commit()
         result = conn.execute("SELECT result FROM proposals WHERE id = ?", (pid,)).fetchone()[0]
         refs = (json.loads(result) or {}).get("refs", {}) if result else {}
@@ -1081,8 +1391,15 @@ def _measure(conn, run, episode_id, text, drafts, chapters, profile, problems_be
                                                "ORDER BY release_nr DESC LIMIT 5", (episode_id,))]
         out["wiederholung"] = quality.repetition(text, previous)
         out["konkretheit"] = quality.concreteness(text, names)["wert"]
-        reference = profiles.style_samples(profile, 20000) if profile else ""
+        if getattr(run, "stimme", None):
+            reference = stimmen.reference_text(run.stimme)
+            run.stil_massstab = (f"Stimme „{run.stimme['name']}“ – "
+                                 + ((run.stimme.get("messwerte") or {}).get("quelle") or "ohne Maßstab")) if reference else None
+        else:
+            reference = profiles.style_samples(profile, 20000) if profile else ""
+            run.stil_massstab = "Erzählprofil (eigene Texte)" if reference else None
         if not reference:
+            run.stil_massstab = "letzte Folgen (keine Stimme mit Maßstab)"
             reference = "\n".join(previous[:3])
         dev = quality.style_deviation(text, reference)
         if dev is not None:
@@ -1157,7 +1474,7 @@ def _world_development(conn, plan, text) -> None:
 def list_episodes(conn: sqlite3.Connection) -> list:
     rows = conn.execute(
         "SELECT e.id, e.release_nr, e.title, e.type, e.world_start, e.world_end, e.status, e.word_count, e.created_at, "
-        "e.summary, e.run_id, e.audio_path, e.metrics, t.title AS strang, g.name AS genre FROM episodes e "
+        "e.summary, e.run_id, e.audio_path, e.metrics, e.form, t.title AS strang, g.name AS genre FROM episodes e "
         "LEFT JOIN threads t ON t.id = e.thread_id LEFT JOIN genres g ON g.id = e.genre_id "
         "ORDER BY e.release_nr DESC").fetchall()
     return [dict(r, minuten=round((r["word_count"] or 0) / WORDS_PER_MINUTE), metrics=_public_metrics(r["metrics"], False))
@@ -1181,7 +1498,8 @@ def _public_metrics(raw, reveal: bool):
 def stories(conn: sqlite3.Connection) -> list:
     """Geschichten zum Weitererzählen: offene Stränge mit Genre, Folgenzahl und letzter Folge."""
     rows = conn.execute(
-        "SELECT t.id, t.title, t.premise, t.level, t.status, t.world_time_cursor, t.genre_id, t.abweichung, g.name AS genre, "
+        "SELECT t.id, t.title, t.premise, t.level, t.status, t.world_time_cursor, t.genre_id, t.abweichung, t.stimme_id, "
+        "g.name AS genre, "
         "g.age_rating AS genre_alter, COUNT(e.id) AS folgen, MAX(e.release_nr) AS letzte_nr "
         "FROM threads t LEFT JOIN genres g ON g.id = t.genre_id LEFT JOIN episodes e ON e.thread_id = t.id "
         "WHERE t.visibility = 'offen' GROUP BY t.id ORDER BY MAX(e.release_nr) IS NULL, MAX(e.release_nr) DESC, t.id DESC"
@@ -1220,11 +1538,12 @@ def get_episode(conn: sqlite3.Connection, episode_id: int, reveal: bool = False)
 
 
 def export_text(conn: sqlite3.Connection, episode_id: int) -> tuple:
-    row = conn.execute("SELECT release_nr, title, text FROM episodes WHERE id = ?", (episode_id,)).fetchone()
+    row = conn.execute("SELECT release_nr, title, text, form FROM episodes WHERE id = ?", (episode_id,)).fetchone()
     if row is None:
         raise LookupError("Folge nicht gefunden.")
     safe = re.sub(r"[^A-Za-z0-9ÄÖÜäöüß_-]+", "_", row["title"] or "Folge").strip("_")
-    return f"Folge_{row['release_nr']:03d}_{safe}.txt", f"[Erzähler] Folge {row['release_nr']}: {row['title']}\n\n{row['text']}\n"
+    head = row["title"] if row["form"] == "geschichte" else f"Folge {row['release_nr']}: {row['title']}"
+    return f"Folge_{row['release_nr']:03d}_{safe}.txt", f"[Erzähler] {head}\n\n{row['text']}\n"
 
 
 def export_pdf(conn: sqlite3.Connection, episode_id: int) -> tuple:

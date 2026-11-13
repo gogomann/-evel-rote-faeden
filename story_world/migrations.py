@@ -31,7 +31,7 @@ from pathlib import Path
 
 from .database import initialize
 
-LATEST_VERSION = 12
+LATEST_VERSION = 16
 
 # Tabellen, die Herkunft (created_by) und Sichtbarkeit (visibility) erhalten.
 TRACKED_TABLES = (
@@ -457,6 +457,55 @@ def _migrate_to_12(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE episodes ADD COLUMN scenario_set_id INTEGER")
 
 
+_V13_EVENTS = """
+CREATE TABLE IF NOT EXISTS run_events (
+    id INTEGER PRIMARY KEY,
+    run_id INTEGER NOT NULL REFERENCES ai_runs(id),
+    call_id INTEGER REFERENCES ai_calls(id),
+    phase TEXT NOT NULL,
+    art TEXT NOT NULL,
+    titel TEXT NOT NULL,
+    eingaben TEXT,
+    regel TEXT,
+    ergebnis TEXT,
+    ausgang TEXT NOT NULL DEFAULT 'info' CHECK (ausgang IN ('info', 'ok', 'warnung', 'eingriff', 'mensch', 'fehler')),
+    backstage INTEGER NOT NULL DEFAULT 0,
+    sekunden REAL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+
+def _migrate_to_13(connection: sqlite3.Connection) -> None:
+    """Entscheidungsprotokoll je Lauf (Nachvollzug) und Lauf-Bezug im Änderungsprotokoll."""
+    connection.execute(_V13_EVENTS)
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(run_id)")
+    if "run_id" not in _columns(connection, "audit_log"):
+        connection.execute("ALTER TABLE audit_log ADD COLUMN run_id INTEGER")
+
+
+def _migrate_to_14(connection: sqlite3.Connection) -> None:
+    """Stimme (virtueller Autor, story_world.stimmen.json) je Geschichte und je Folge."""
+    for table in ("threads", "episodes"):
+        if "stimme_id" not in _columns(connection, table):
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN stimme_id TEXT")
+
+
+def _migrate_to_15(connection: sqlite3.Connection) -> None:
+    """Herkunft von Text-Impulsen (wessen Text, welcher Text, fremd?) und verborgener Inhalt nach Import."""
+    cols = _columns(connection, "impulses")
+    for name, sql in (("besitzer", "TEXT"), ("quelle_text", "TEXT"), ("fremd", "INTEGER NOT NULL DEFAULT 0"),
+                      ("content_verborgen", "TEXT")):
+        if name not in cols:
+            connection.execute(f"ALTER TABLE impulses ADD COLUMN {name} {sql}")
+
+
+def _migrate_to_16(connection: sqlite3.Connection) -> None:
+    """Form einer Ausgabe: Folge der Reihe oder eigenständige Geschichte (für Hörer ohne Vorwissen)."""
+    if "form" not in _columns(connection, "episodes"):
+        connection.execute("ALTER TABLE episodes ADD COLUMN form TEXT NOT NULL DEFAULT 'folge'")
+
+
 def _migrate_to_3(connection: sqlite3.Connection) -> None:
     connection.execute(_V3_TECHNOLOGIES)
     if "perspective_of_episode_id" not in _columns(connection, "episodes"):
@@ -514,6 +563,14 @@ def migrate(connection: sqlite3.Connection, db_path: Path | None = None) -> dict
             _migrate_to_11(connection)
         if version < 12:
             _migrate_to_12(connection)
+        if version < 13:
+            _migrate_to_13(connection)
+        if version < 14:
+            _migrate_to_14(connection)
+        if version < 15:
+            _migrate_to_15(connection)
+        if version < 16:
+            _migrate_to_16(connection)
         connection.execute(f"PRAGMA user_version = {LATEST_VERSION}")
         connection.execute("COMMIT")
     except Exception:

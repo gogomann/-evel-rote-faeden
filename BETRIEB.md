@@ -47,6 +47,16 @@ Aufgabenplanung → „Einfache Aufgabe erstellen“ → täglich 20:00 → Prog
 - Nichts wird gelöscht: Überholtes kommt nach `_old/`, ersetzte Audio-WAVs nach `welten/audio/<welt>/_wav/`,
   entfernte KI-Anbieter ins Archiv der Einstellungen, Nachrichtenquellen werden deaktiviert statt gelöscht.
 
+## Export und Umzug
+- Einstellungen → Sicherung → „Export & Umzug“: **Welt** (Kanon, Folgen, Nachvollzug, alle genutzten Stimmen mit
+  Steckbrief, Reglern, Probe und Maßstab; Texte als Basis nur als Stilanker/Maßstab-Auszug; eingearbeitete
+  Text-Abschnitte ohne Inhalt), **Autor** (Erzählprofile, eigene Texte vollständig, alle Stimmen), **Alles**.
+- Import legt Welten immer neu an (nichts wird überschrieben). Gleiche Profil-ID → Texte sichtbar; fremde Profil-ID →
+  Basis und offene Text-Abschnitte liegen verborgen, die KI nutzt sie trotzdem. Kommt der Mensch später per
+  Autor-Import dazu, wird alles sichtbar.
+- „Fremder Text“ (Texte als Basis): Text eines anderen Autors – nie Stilprobe, nie Basis einer Stimme.
+- Verweist eine Welt auf eine Stimme, die es auf dem Rechner nicht gibt, meldet das Protokoll eine Warnung.
+
 ## Fehlersuche
 - **KI-Läufe**: jeder Auftrag mit Weg, Modell, Ausweich-Modellen, Fehlern (Rohantwort nur mit Backstage).
 - **Prüfung**: Lücken und automatische Konsistenzprüfung (zwei Orte gleichzeitig, Reisezeit, tote Figuren).
