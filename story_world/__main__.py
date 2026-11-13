@@ -8,6 +8,7 @@
   python3 -m story_world vertonen <welt> <folge-nr> [--modus hoerbuch|hoerspiel]   Folge über TTS-Server vertonen (WAV)
   python3 -m story_world neu "Name der Welt" [--leer]
   python3 -m story_world migrate pfad.sqlite3 Datei auf aktuelles Schema bringen (mit Backup)
+  python3 -m story_world update [--nur-pruefen]  Programm von Codeberg aktualisieren (Daten bleiben unberührt)
   python3 -m story_world pfad.sqlite3         wie bisher: Basisschema anlegen/ergänzen
 """
 
@@ -75,6 +76,25 @@ def main() -> None:
         from .worlds import create_world, path_for
         slug = create_world(opts.name, opts.beschreibung, not opts.leer)
         print(f"Welt angelegt: {path_for(slug)}")
+    elif command == "update":
+        parser = argparse.ArgumentParser(prog="story_world update")
+        parser.add_argument("--nur-pruefen", action="store_true")
+        opts = parser.parse_args(args[1:])
+        from . import update
+        try:
+            info = update.check()
+            if not info["neuer"]:
+                print(f"Aktuell: {info['aktuell']} (neueste auf Codeberg: {info['neueste'] or '–'}).")
+            elif opts.nur_pruefen:
+                print(f"Neue Version {info['neueste']} verfügbar (installiert: {info['aktuell']}).")
+            else:
+                report = update.install()
+                print(f"Aktualisiert {report['von']} → {report['nach']}: {report['geaendert']} geändert, "
+                      f"{report['neu']} neu, {report['entfallen']} entfallen"
+                      + (f"; alte Fassungen in {report['sicherung']}" if report["sicherung"] else "")
+                      + ". Bitte Story World neu starten.")
+        except update.UpdateError as exc:
+            sys.exit(str(exc))
     elif command == "migrate":
         parser = argparse.ArgumentParser(prog="story_world migrate")
         parser.add_argument("database")

@@ -45,3 +45,6 @@ unsloth-tmp/
 
 # Gedächtnis-Exporte (Arbeitsnotizen) – nur lokal
 /_gedaechtnis/
+
+# Update-Zwischenstand (Downloads, Zustand) – nur lokal
+/_update/

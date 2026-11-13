@@ -219,6 +219,9 @@ pre.live { max-height: 420px; overflow: auto; white-space: pre-wrap; word-break:
 .warn-text { color: var(--warn); }
 .note { background: var(--panel2); border-left: 3px solid var(--warn); border-radius: 0 6px 6px 0; padding: 8px 12px; line-height: 1.5; }
 .banner.warn { background: var(--panel2); color: var(--text); border-left: 4px solid var(--warn); }
+.update-banner { max-width: 1300px; margin: 14px auto 0; padding: 0 20px; box-sizing: border-box; }
+.update-banner .banner { margin: 0; align-items: flex-start; }
+.update-notes { white-space: pre-wrap; margin: 6px 0 0; font-size: 13px; line-height: 1.5; }
 .banner.warn ul { margin: 6px 0 0 18px; padding: 0; }
 
 /* Seite eines Menschen */

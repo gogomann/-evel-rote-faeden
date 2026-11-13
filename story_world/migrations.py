@@ -33,6 +33,9 @@ from .database import initialize
 
 LATEST_VERSION = 16
 
+# Schemaänderungen bestehender Welten seit Programmstart – für den Hinweis in der Oberfläche nach einem Update.
+REPORTS: list = []
+
 # Tabellen, die Herkunft (created_by) und Sichtbarkeit (visibility) erhalten.
 TRACKED_TABLES = (
     "peoples", "calendars", "characters", "locations", "threads",
@@ -579,4 +582,6 @@ def migrate(connection: sqlite3.Connection, db_path: Path | None = None) -> dict
     finally:
         connection.execute("PRAGMA foreign_keys = ON")
     report["to"] = LATEST_VERSION
+    if db_path is not None and version >= 1:
+        REPORTS.append({"datei": Path(db_path).name, "von": version, "nach": LATEST_VERSION, "sicherung": report["backup"]})
     return report

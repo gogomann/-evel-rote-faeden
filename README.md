@@ -47,6 +47,13 @@ verborgen, wenn der Mensch (Profil-ID) auf dem Zielrechner nicht bekannt ist. Ex
 Alternativ von Hand: `welten/`, `story_world.config.json`, `story_world.profiles.json`, `story_world.stimmen.json`,
 `profile_texte/` und `story_world.qualitaet.sqlite3` in die neue Installation legen.
 
+**Aktualisieren**: Einstellungen → Update → „Nach Updates suchen“ → „Jetzt installieren“ → „Jetzt neu starten“
+(Windows: Fenster schließen und neu starten). Ohne Oberfläche: `python3 -m story_world update`. Ersetzt werden nur
+Programmdateien; Welten, Einstellungen, Profile, Stimmen, Texte und Exporte bleiben unberührt, alte Programmdateien
+landen in `_old/`. Beim ersten Öffnen passt jede Welt ihr Datenbankschema an (vorher automatische Sicherung in
+`welten/backups/`). Wer lieber das ZIP von Codeberg in denselben Ordner entpackt, kann das weiter tun – die Daten
+sind nicht im ZIP enthalten und werden dabei nicht überschrieben. Ein Ordner mit `.git/` wird nur per `git pull` aktualisiert.
+
 | Funktion | Mac | Windows |
 |---|---|---|
 | Oberfläche, Welten, KI-Anbieter, Folgen, MCP | ✓ | ✓ |

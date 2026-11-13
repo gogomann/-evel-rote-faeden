@@ -1572,7 +1572,7 @@ function applyTheme(theme) {
 // ------------------------------------------------------------ Einstellungen
 
 const SUBS = [["anbieter", "KI-Anbieter"], ["aufgaben", "Modelle je Aufgabe"], ["qualitaet", "↳ Qualität der Modelle"], ["menschen", "Menschen & Profile"], ["darstellung", "Darstellung"],
-  ["tts", "TTS-Server"], ["welt", "Diese Welt"], ["schnittstellen", "Schnittstellen"], ["sicherung", "Sicherung"]];
+  ["tts", "TTS-Server"], ["welt", "Diese Welt"], ["schnittstellen", "Schnittstellen"], ["sicherung", "Sicherung"], ["update", "Update"]];
 const STATUS_TXT = { ok: "verbunden", fehler: "Fehler", ungeprueft: "nicht geprüft" };
 const statusChip = (s) => `<span class="chip st-${s === "ok" ? "fertig" : s === "fehler" ? "fehler" : "offen"}">${STATUS_TXT[s] || esc(s)}</span>`;
 const SUB = {};
@@ -2205,6 +2205,103 @@ SUB.sicherung = async (el) => {
   })));
 };
 
+// ------------------------------------------------------------ Programm-Update
+
+const UPD = { info: null, report: null };
+
+SUB.update = async (el) => {
+  const st = await api("/api/update/status");
+  const info = UPD.info, rep = UPD.report;
+  const notes = (txt) => (txt ? `<div class="update-notes">${esc(txt)}</div>` : "");
+  let result = "";
+  if (rep || st.wartet_auf_neustart) {
+    result = `<div class="card stack"><b>Update ${esc(rep ? rep.nach : "")} ist installiert.</b>
+      ${rep ? `<div class="small">${rep.geaendert} Dateien geändert, ${rep.neu} neu, ${rep.entfallen} entfallen.
+        ${rep.sicherung ? `Die alten Fassungen liegen in <code>${esc(rep.sicherung)}</code>.` : ""}</div>` : ""}
+      <div class="small muted">Wirksam nach dem Neustart. Deine Welten werden beim ersten Öffnen automatisch angepasst – vorher wird jeweils eine Sicherung angelegt.</div>
+      ${st.neustart_automatisch ? '<div class="row"><button class="primary" id="u-restart">Jetzt neu starten</button></div>'
+        : '<div class="note small">Bitte das Story-World-Fenster schließen und „Story World starten.bat“ erneut doppelklicken.</div>'}</div>`;
+  } else if (info && info.neuer) {
+    result = `<div class="card stack"><div class="row spread"><b>Neue Version ${esc(info.neueste)}</b>
+      <span class="small muted">${esc((info.veroeffentlicht || "").slice(0, 10))}</span></div>
+      ${notes(info.notizen) || '<div class="small muted">Keine Beschreibung zum Release.</div>'}
+      ${st.entwickler ? '<div class="note small">Dieser Ordner ist ein Git-Entwicklerstand – hier bitte <code>git pull</code> verwenden.</div>'
+        : `<div class="row"><button class="primary" id="u-install" ${st.jobs_laufen ? "disabled" : ""}>Jetzt installieren</button>
+          ${st.jobs_laufen ? '<span class="small muted">Erst laufende KI-Aufträge abwarten.</span>' : ""}</div>`}</div>`;
+  } else if (info) {
+    result = `<div class="card small">Du hast die neueste Version${info.neueste ? ` (${esc(info.neueste)})` : ""}. Geprüft: ${esc(info.geprueft)}</div>`;
+  }
+  el.innerHTML = `<h2>Update</h2><div class="card stack">
+    <div class="row spread"><span>Installierte Version <b>${esc(st.version)}</b></span>
+      <button class="ghost" id="u-check">Nach Updates suchen</button></div>
+    <p class="small muted">Lädt neue Versionen von Codeberg. Ersetzt werden nur Programmdateien – Welten, Einstellungen, Profile, Stimmen,
+      Texte und Exporte bleiben unberührt. Alte Programmdateien kommen nach <code>_old/</code>, nichts wird gelöscht.</p>
+    <label class="small row" style="gap:6px;text-transform:none;letter-spacing:0;font-weight:400"><input type="checkbox" id="u-auto" style="width:auto" ${st.automatisch ? "checked" : ""}>
+      Beim Start automatisch nachsehen (höchstens einmal am Tag)</label></div>
+    <div id="u-result" class="stack" style="margin-top:14px">${result}</div>`;
+  $("#u-auto").onchange = (e) => guard(async () => { await api("/api/update/einstellungen", { method: "PUT", body: { automatisch: e.target.checked } }); });
+  $("#u-check").onclick = () => guard(async () => {
+    const b = $("#u-check"); b.disabled = true; b.textContent = "Suche …";
+    try { UPD.info = await api("/api/update/pruefen", { method: "POST", body: {} }); } finally { b.disabled = false; b.textContent = "Nach Updates suchen"; }
+    render();
+  });
+  const inst = $("#u-install");
+  if (inst) inst.onclick = () => guard(async () => {
+    inst.disabled = true; inst.textContent = "Lade und installiere …";
+    try { UPD.report = await api("/api/update/installieren", { method: "POST", body: {} }); toast("Update installiert.", "ok"); }
+    finally { inst.disabled = false; inst.textContent = "Jetzt installieren"; }
+    render();
+  });
+  const rs = $("#u-restart");
+  if (rs) rs.onclick = () => guard(async () => {
+    rs.disabled = true; rs.textContent = "Starte neu …";
+    await api("/api/update/neustart", { method: "POST", body: {} });
+    await waitForRestart(st.version);
+  });
+};
+
+async function waitForRestart(oldVersion) {
+  const until = Date.now() + 90000;
+  await new Promise((r) => setTimeout(r, 1500));
+  while (Date.now() < until) {
+    try {
+      const res = await fetch("/api/update/status", { headers: { "X-Story-World": "1" } });
+      if (res.ok) { const s = await res.json(); if (s.version !== oldVersion) { location.reload(); return; } }
+    } catch (e) { /* Server startet gerade neu */ }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  toast("Neustart dauert ungewöhnlich lange – bitte Story World von Hand neu starten.", "bad");
+}
+
+async function showUpdateBanner() {
+  const st = await api("/api/update/status").catch(() => null);
+  const box = $("#update-banner");
+  if (!st) return;
+  const parts = [];
+  if (st.neu) {
+    const secs = st.neu.abschnitte.map((a) => `<div style="margin-top:6px"><b>${esc(a.titel)}</b><div class="update-notes">${esc(a.text)}</div></div>`).join("");
+    parts.push(`<div><b>Update installiert: ${esc(st.neu.von)} → ${esc(st.neu.nach)}</b>
+      ${secs || (st.neu.notizen ? `<div class="update-notes">${esc(st.neu.notizen)}</div>` : "")}
+      ${st.neu.sicherung ? `<div class="small muted">Alte Programmdateien: <code>${esc(st.neu.sicherung)}</code></div>` : ""}</div>`);
+  }
+  if (st.migrationen.length) {
+    parts.push(`<div class="small"><b>Datenbanken angepasst:</b> ${st.migrationen.map((m) => `${esc(m.datei)} (Schema ${m.von} → ${m.nach}${m.sicherung
+      ? `, Sicherung ${esc(m.sicherung.split(/[\\/]/).pop())}` : ""})`).join(", ")}. Deine Inhalte bleiben erhalten; die Sicherungen liegen in welten/backups/.</div>`);
+  }
+  if (parts.length) {
+    box.innerHTML = `<div class="banner"><div class="stack">${parts.join("")}</div><button class="ghost" id="ub-ok">Verstanden</button></div>`;
+    box.classList.remove("hidden");
+    $("#ub-ok").onclick = () => guard(async () => { await api("/api/update/gesehen", { method: "POST", body: {} }); box.classList.add("hidden"); box.innerHTML = ""; });
+  } else if (st.verfuegbar && !sessionStorage.getItem("sw-upd-hinweis")) {
+    try { sessionStorage.setItem("sw-upd-hinweis", "1"); } catch (e) {}
+    box.innerHTML = `<div class="banner"><span>Neue Version <b>${esc(st.verfuegbar.neueste)}</b> verfügbar.</span>
+      <span class="row"><button class="primary" id="ub-go">Ansehen</button><button class="ghost" id="ub-later">Später</button></span></div>`;
+    box.classList.remove("hidden");
+    $("#ub-go").onclick = () => { box.classList.add("hidden"); UPD.info = { ...st.verfuegbar, neuer: true }; openSettings("update"); };
+    $("#ub-later").onclick = () => box.classList.add("hidden");
+  }
+}
+
 // ------------------------------------------------------------ KI-Jobs
 
 let pollTimer = null;
@@ -2246,6 +2343,7 @@ async function checkJobs() {
   showUser();
   render();
   checkJobs();
+  showUpdateBanner();
   guard(chooseUser);  // beim Start: Wer bedient gerade?
 })();
 

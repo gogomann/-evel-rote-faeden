@@ -47,6 +47,24 @@ Aufgabenplanung → „Einfache Aufgabe erstellen“ → täglich 20:00 → Prog
 - Nichts wird gelöscht: Überholtes kommt nach `_old/`, ersetzte Audio-WAVs nach `welten/audio/<welt>/_wav/`,
   entfernte KI-Anbieter ins Archiv der Einstellungen, Nachrichtenquellen werden deaktiviert statt gelöscht.
 
+## Update
+- Einstellungen → Update: prüft Codeberg (`releases/latest`, sonst höchster Tag `vX.Y.Z`), zeigt die Release-Notizen,
+  lädt das ZIP nach `_update/` und ersetzt nur Programmdateien, die sich geändert haben. Alte Fassungen und entfallene
+  Dateien → `_old/update-<alt>-nach-<neu>-<zeit>/`. Nutzerdaten (`welten/`, `exporte/`, `profile_texte/`,
+  `story_world.*.json`, `*.sqlite3`) werden nie angefasst. Schlägt etwas fehl, wird der alte Stand wiederhergestellt.
+- Während KI-Aufträge laufen, sind Installieren und Neustart gesperrt. Neustart: Mac/Linux per Knopf (Seite lädt von selbst neu),
+  Windows: Fenster schließen und neu starten. Der MCP-Server in Claude nutzt den neuen Stand erst nach einem Neustart von Claude.
+- Nach dem Neustart zeigt ein Hinweis, was neu ist (`AENDERUNGEN.md`) und welche Welten ein neues Schema bekommen haben.
+- Beim Start wird höchstens einmal am Tag still nach Updates gesehen (abschaltbar unter Einstellungen → Update).
+- Ein Ordner mit `.git/` (Entwicklerstand) wird nie per Update überschrieben – dort `git pull`.
+
+### Neue Version veröffentlichen
+1. `__version__` in `story_world/__init__.py` erhöhen (z. B. `0.2.0`) und in `AENDERUNGEN.md` einen Abschnitt `## 0.2.0 – …` ergänzen.
+2. Schemaänderungen nur als neue Migration in `migrations.py` (`LATEST_VERSION` + `_migrate_to_N`), nie bestehende ändern.
+3. Committen, Tag setzen und pushen: `git tag v0.2.0 && git push origin main v0.2.0`.
+4. Auf Codeberg zum Tag ein Release anlegen; der Beschreibungstext erscheint im Update-Dialog. Tag und `__version__` müssen
+   übereinstimmen, sonst bricht das Update ab.
+
 ## Export und Umzug
 - Einstellungen → Sicherung → „Export & Umzug“: **Welt** (Kanon, Folgen, Nachvollzug, alle genutzten Stimmen mit
   Steckbrief, Reglern, Probe und Maßstab; Texte als Basis nur als Stilanker/Maßstab-Auszug; eingearbeitete

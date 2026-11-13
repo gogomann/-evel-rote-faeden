@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import austausch, audio, tts, daily, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, stimmen, szenarien, vergleich, worlds
+from . import austausch, audio, tts, daily, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, stimmen, szenarien, update, vergleich, worlds
 
 STATIC = Path(__file__).with_name("static")
 FAVICON = STATIC / "favicon"
@@ -1015,6 +1015,50 @@ def post_restore(req, body):
     return {"slug": worlds.restore_backup(body.get("datei", ""))}
 
 
+# ---- Programm-Update (Codeberg-Releases)
+
+def _jobs_running() -> bool:
+    with JOBS_LOCK:
+        return any(j["status"] == "laeuft" for j in JOBS)
+
+
+@route("GET", "/api/update/status")
+def get_update_status(req, body):
+    return {**update.status(), "jobs_laufen": _jobs_running()}
+
+
+@route("POST", "/api/update/pruefen")
+def post_update_check(req, body):
+    return update.check()
+
+
+@route("POST", "/api/update/installieren")
+def post_update_install(req, body):
+    if _jobs_running():
+        raise HTTPError(409, "Erst die laufenden KI-Aufträge abwarten, dann aktualisieren.")
+    return update.install()
+
+
+@route("POST", "/api/update/neustart")
+def post_update_restart(req, body):
+    if sys.platform == "win32":
+        raise HTTPError(400, "Unter Windows bitte das Story-World-Fenster schließen und neu starten.")
+    if _jobs_running():
+        raise HTTPError(409, "Erst die laufenden KI-Aufträge abwarten, dann neu starten.")
+    threading.Thread(target=update.restart, args=(req.server.server_address[1],), daemon=True).start()
+    return {"ok": True}
+
+
+@route("POST", "/api/update/gesehen")
+def post_update_seen(req, body):
+    return update.acknowledge()
+
+
+@route("PUT", "/api/update/einstellungen")
+def put_update_settings(req, body):
+    return update.set_auto(bool(body.get("automatisch", True)))
+
+
 @route("GET", "/api/audio/stimmen")
 def get_voices(req, body):
     all_voices = audio.voices()
@@ -1316,6 +1360,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(502, {"fehler": str(exc)})
         except tts.TTSError as exc:
             self._send(502, {"fehler": str(exc)})
+        except update.UpdateError as exc:
+            self._send(exc.code, {"fehler": str(exc)})
         except LookupError as exc:
             self._send(404, {"fehler": str(exc).strip("'\"")})
         except (ValueError, KeyError) as exc:
@@ -1377,6 +1423,7 @@ def serve(port: int = 8765, open_browser: bool = True) -> None:
         sys.exit(f"Port {port} ist belegt ({exc}). Anderen Port wählen: python3 -m story_world ui --port 8800")
     print(f"Story World läuft auf {url}  (Welten: {worlds.worlds_dir()})  – Beenden mit Strg+C")
     daily.start_scheduler(_start_job)
+    threading.Thread(target=update.auto_check, daemon=True).start()
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:
