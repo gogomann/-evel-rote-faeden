@@ -11,6 +11,7 @@ Sicherheit im lokalen Betrieb:
 from __future__ import annotations
 
 import base64
+import html
 import http.client
 import json
 import os
@@ -26,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import austausch, audio, tts, daily, vorlage, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, stimmen, szenarien, update, vergleich, worlds
+from . import austausch, audio, chatgpt, tts, daily, vorlage, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, stimmen, szenarien, update, vergleich, worlds
 
 STATIC = Path(__file__).with_name("static")
 FAVICON = STATIC / "favicon"
@@ -277,6 +278,46 @@ def post_provider_models(req, body, pid):
         return dict(providers.load_models(pid), ok=True)
     except providers.ProviderError as exc:
         return {"ok": False, "fehler": str(exc)}
+
+
+@route("POST", P + "/chatgpt/anmelden")
+def post_chatgpt_login(req, body, pid):
+    if body.get("abo_erneut"):
+        chatgpt.request_plan_again(pid)
+    return {"url": chatgpt.start(pid, req.server.server_address[1])}
+
+
+@route("POST", P + "/chatgpt/abmelden")
+def post_chatgpt_logout(req, body, pid):
+    return chatgpt.sign_out(pid)
+
+
+@route("POST", P + "/chatgpt/hinweis-gesehen")
+def post_chatgpt_notice(req, body, pid):
+    chatgpt.mark_notice_seen(pid)
+    return {"ok": True}
+
+
+def chatgpt_callback_page(query: dict) -> bytes:
+    """Rückruf der ChatGPT-Anmeldung: Code einlösen, Modelle laden, kurze Seite für den Browser."""
+    try:
+        result = chatgpt.callback(query)
+    except providers.ProviderError as exc:
+        result = {"ok": False, "meldung": str(exc)}
+    if result.get("ok"):
+        try:
+            providers.load_models(result["pid"])
+            result["meldung"] += " Modelle sind geladen."
+        except providers.ProviderError as exc:
+            result["meldung"] += f" Modelle konnten noch nicht geladen werden: {exc}"
+    title = "Mit ChatGPT angemeldet" if result.get("ok") else "Anmeldung nicht abgeschlossen"
+    return f"""<!DOCTYPE html><html lang="de"><head><meta charset="utf-8"><title>{html.escape(title)}</title>
+<style>body{{font-family:system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 20px;line-height:1.5}}
+.box{{border:1px solid #ccc;border-radius:12px;padding:20px 24px}}a{{color:inherit}}</style></head>
+<body><div class="box"><h1 style="font-size:1.3em">{"✓ " if result.get("ok") else ""}{html.escape(title)}</h1>
+<p>{html.escape(result.get("meldung", ""))}</p>
+<p>Du kannst dieses Fenster schließen und zu Evel • Rote Fäden zurückkehren – oder <a href="/">hier weiter</a>.</p>
+</div></body></html>""".encode("utf-8")
 
 
 @route("GET", P + "/modelle")
@@ -1335,6 +1376,9 @@ class Handler(BaseHTTPRequestHandler):
                     raise HTTPError(403, "Schreibzugriff nur über die Oberfläche.")
                 if origin and origin.replace("http://", "") not in self._allowed_hosts():
                     raise HTTPError(403, "Fremder Ursprung.")
+            if method == "GET" and path == chatgpt.CALLBACK_PATH:
+                query = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                return self._send(200, chatgpt_callback_page(query), "text/html; charset=utf-8")
             if method == "GET" and path == "/favicon.ico":
                 path = "/favicon/favicon-32x32.ico"
             icon = re.match(r"^/favicon/([a-z0-9-]+\.(png|ico))$", path)

@@ -1791,11 +1791,12 @@ SUB.anbieter = async (el) => {
   const st = S.settings;
   const cards = st.providers.map((p) => `<div class="card stack">
     <div class="row spread"><div><b>${esc(p.name)}</b> <span class="muted small">${esc(p.preset_name)}</span></div>${statusChip(p.status)}</div>
-    <div class="small muted">${esc(p.base_url)}</div>
-    <div class="small">Schlüssel: ${p.api_key_gesetzt ? esc(p.api_key_maskiert) : '<span class="muted">keiner</span>'} · ${p.models_count} Modelle</div>
+    ${p.chatgpt ? chatgptStatusHtml(p) : `<div class="small muted">${esc(p.base_url)}</div>
+    <div class="small">Schlüssel: ${p.api_key_gesetzt ? esc(p.api_key_maskiert) : '<span class="muted">keiner</span>'} · ${p.models_count} Modelle</div>`}
     ${p.last_error ? `<div class="err small">${esc(p.last_error)}</div>` : ""}
     ${p.readonly ? '<div class="small muted">Aus Umgebungsvariablen – hier nicht änderbar.</div>' : ""}
     <div class="row">${p.readonly ? "" : `<button class="ghost" data-edit="${p.id}">Bearbeiten</button>`}
+      ${p.chatgpt && !p.chatgpt.plan ? `<button class="chatgpt-btn" data-cglogin="${p.id}">Continue with ChatGPT</button>` : ""}
       <button class="ki" data-verify="${p.id}">Prüfen</button><button class="ghost" data-models="${p.id}">Modelle laden</button></div></div>`).join("");
   el.innerHTML = `<div class="row spread"><h2>KI-Anbieter</h2><button class="primary" id="p-add">+ Anbieter hinzufügen</button></div>
     ${st.providers.length ? "" : `<div class="guide"><b>In drei Schritten zur KI</b><ol>
@@ -1811,6 +1812,8 @@ SUB.anbieter = async (el) => {
   el.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => { S.editId = b.dataset.edit; S.sub = "anbieter-edit"; render(); }));
   el.querySelectorAll("[data-verify]").forEach((b) => (b.onclick = () => verifyProvider(b.dataset.verify, b)));
   el.querySelectorAll("[data-models]").forEach((b) => (b.onclick = () => loadModels(b.dataset.models, b)));
+  el.querySelectorAll("[data-cglogin]").forEach((b) => (b.onclick = () => chatgptLogin(b.dataset.cglogin, b)));
+  chatgptNotice();
   el.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = () => guard(async () => {
     await api(`/api/settings/providers/${b.dataset.restore}/wiederherstellen`, { method: "POST", body: {} }); render();
   })));
@@ -1990,6 +1993,61 @@ async function compareDialog(call) {
   });
 }
 
+// ------------------------------------------------------------ ChatGPT-Abo (Sign in with ChatGPT)
+
+const CG_USAGE = "https://chatgpt.com/settings/usage";
+function chatgptStatusHtml(p) {
+  const c = p.chatgpt;
+  if (c.anmeldung_laeuft) return `<div class="small">⏳ Anmeldung läuft im Browser – dort bestätigen, dann kommt es hier von selbst an.</div>`;
+  if (!c.angemeldet) return `<div class="small muted">Nicht angemeldet${c.registriert && c.email ? ` (zuletzt ${esc(c.email)})` : ""}.</div>`;
+  return `<div class="small">Konto: <b>${esc(c.email || "ChatGPT")}</b> · ${p.models_count} Modelle</div>
+    ${c.plan ? `<div class="small cg-plan">✓ Using ChatGPT plan · <a href="${CG_USAGE}" target="_blank" rel="noopener">Manage usage</a></div>`
+      : `<div class="small err">Die Nutzung deines ChatGPT-Abos ist nicht freigegeben – ohne Freigabe schreibt die KI nicht.</div>`}`;
+}
+
+async function chatgptLogin(id, btn, again = false) {
+  const p = (S.settings.providers || []).find((x) => x.id === id);
+  const repeat = again || (p && p.chatgpt && p.chatgpt.angemeldet && !p.chatgpt.plan);
+  const r = await api(`/api/settings/providers/${id}/chatgpt/anmelden`, { method: "POST", body: { abo_erneut: repeat } })
+    .catch((e) => ({ fehler: e.message }));
+  if (!r.url) return toast(`Anmeldung nicht möglich: ${r.fehler}`, "bad");
+  window.open(r.url, "_blank", "noopener");
+  if (btn) { btn.disabled = true; btn.textContent = "warte auf Browser …"; }
+  toast("Im Browser bei ChatGPT anmelden und die Nutzung deines Abos erlauben.", "ok");
+  const until = Date.now() + 15 * 60 * 1000;
+  while (Date.now() < until) {
+    await new Promise((res) => setTimeout(res, 2000));
+    const st = await api("/api/settings").catch(() => null);
+    const q = st && st.providers.find((x) => x.id === id);
+    if (q && q.chatgpt && !q.chatgpt.anmeldung_laeuft) {
+      S.settings = st;
+      toast(q.chatgpt.plan ? `✓ Angemeldet als ${q.chatgpt.email || "ChatGPT-Konto"}.` : (q.last_error || "Anmeldung nicht abgeschlossen."),
+        q.chatgpt.plan ? "ok" : "bad");
+      return render();
+    }
+  }
+  render();
+}
+
+async function chatgptLogout(id) {
+  const r = await api(`/api/settings/providers/${id}/chatgpt/abmelden`, { method: "POST", body: {} });
+  toast(r.meldung, r.widerrufen ? "ok" : "bad");
+  render();
+}
+
+function chatgptNotice() {
+  const p = (S.settings.providers || []).find((x) => x.chatgpt && x.chatgpt.hinweis_zeigen);
+  if (!p) return;
+  modal(`<div class="stack"><h2 style="margin:0">You're using your ChatGPT plan</h2>
+    <p>KI-Anfragen über „${esc(p.name)}“ zählen ab jetzt auf das Kontingent deines ChatGPT-Abos. Wie viel diese App davon
+    nutzen darf, legst du in ChatGPT fest: <a href="${CG_USAGE}" target="_blank" rel="noopener">Manage usage</a>.</p>
+    <div class="row"><button class="primary" id="cg-ok">Got it</button></div></div>`);
+  $("#cg-ok").onclick = () => guard(async () => {
+    await api(`/api/settings/providers/${p.id}/chatgpt/hinweis-gesehen`, { method: "POST", body: {} });
+    $("#modal").classList.add("hidden");
+  });
+}
+
 async function verifyProvider(id, btn) {
   if (btn) { btn.disabled = true; btn.textContent = "prüfe …"; }
   const r = await api(`/api/settings/providers/${id}/pruefen`, { method: "POST", body: {} }).catch((e) => ({ ok: false, fehler: e.message }));
@@ -2009,7 +2067,7 @@ SUB["anbieter-neu"] = async (el) => {
     <p class="muted">Wähle einen Anbieter. Adresse und Anleitung sind schon vorbereitet – du brauchst meist nur deinen Schlüssel.</p>
     <div class="provider-grid">${S.settings.presets.map((p) => `<button class="preset" data-preset="${p.id}">
       <b>${esc(p.name)}</b><span class="small muted">${esc(p.info)}</span>
-      <div class="small" style="margin-top:6px">${p.needs_key ? "🔑 Schlüssel nötig" : "Kein Schlüssel nötig"}</div></button>`).join("")}</div>`;
+      <div class="small" style="margin-top:6px">${p.oauth ? "Anmeldung mit ChatGPT-Konto" : p.needs_key ? "🔑 Schlüssel nötig" : "Kein Schlüssel nötig"}</div></button>`).join("")}</div>`;
   $("#back").onclick = () => { S.sub = "anbieter"; render(); };
   el.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => { S.newPreset = b.dataset.preset; S.editId = null; S.sub = "anbieter-edit"; render(); }));
 };
@@ -2017,6 +2075,14 @@ SUB["anbieter-neu"] = async (el) => {
 function guideHtml(preset) {
   const link = preset.key_url ? `<a href="${esc(preset.key_url)}" target="_blank" rel="noopener">${esc(preset.key_url)}</a>` : "";
   let steps;
+  if (preset.oauth) {
+    return `<div class="guide"><b>So geht’s – ${esc(preset.name)}</b><p class="small" style="margin:4px 0">${esc(preset.info)}</p>
+    <ol class="small"><li>„Continue with ChatGPT“ drücken – der Browser öffnet die Anmeldung bei OpenAI.</li>
+      <li>Mit deinem ChatGPT-Konto anmelden und erlauben, dass Evel • Rote Fäden dein Abo nutzt.</li>
+      <li>Zurück hier sind die Modelle schon geladen – unter „Modelle je Aufgabe“ auswählen.</li></ol>
+    <p class="small muted" style="margin:6px 0 0">Nur für ChatGPT Plus und Pro. Kein API-Schlüssel, keine Zusatzkosten bei OpenAI;
+      es zählt das Kontingent deines Abos. Die Anmeldung bleibt auf deinem Rechner.</p></div>`;
+  }
   if (preset.id === "custom") {
     steps = ["Adresse deines Gateways eintragen (endet meist auf /v1).", "Schlüssel nur eintragen, wenn dein Gateway einen verlangt.",
       "„Speichern &amp; prüfen“ drücken.", "„Modelle laden“ – danach unter „Modelle je Aufgabe“ auswählen."];
@@ -2045,14 +2111,16 @@ SUB["anbieter-edit"] = async (el) => {
     ${guideHtml(preset)}
     <div class="card form stack">
       <div class="field"><label>Anzeigename</label><input id="pe-name" value="${esc(p ? p.name : preset.name)}"></div>
-      <div class="field"><label>Adresse (Base-URL)</label><input id="pe-url" value="${esc(p ? p.base_url : preset.base_url)}" placeholder="https://…/v1"></div>
+      ${preset.oauth ? (p ? chatgptStatusHtml(p) : "") : `<div class="field"><label>Adresse (Base-URL)</label><input id="pe-url" value="${esc(p ? p.base_url : preset.base_url)}" placeholder="https://…/v1"></div>
       <div class="field"><label>API-Schlüssel ${preset.needs_key ? "" : "(optional)"}</label>
         <div class="row" style="flex-wrap:nowrap"><input id="pe-key" type="password" autocomplete="off"
           placeholder="${p && p.api_key_gesetzt ? "gespeichert: " + esc(p.api_key_maskiert) + " – leer lassen zum Behalten" : "hier einfügen"}">
-          <button class="ghost" id="pe-show" type="button">👁</button></div></div>
+          <button class="ghost" id="pe-show" type="button">👁</button></div></div>`}
       ${p && p.last_error ? `<div class="err small">${esc(p.last_error)}</div>` : ""}
-      <div class="row spread"><div class="row">${p ? `<button class="danger" id="pe-arch">Ins Archiv</button>` : ""}</div>
-        <div class="row"><button class="primary" id="pe-save">${p ? "Speichern" : "Speichern & prüfen"}</button>
+      <div class="row spread"><div class="row">${p ? `<button class="danger" id="pe-arch">Ins Archiv</button>` : ""}
+        ${p && p.chatgpt && p.chatgpt.angemeldet ? `<button class="ghost" id="pe-cgout">Abmelden</button>` : ""}</div>
+        <div class="row">${preset.oauth && (!p || !p.chatgpt.plan) ? `<button class="chatgpt-btn" id="pe-cglogin">Continue with ChatGPT</button>` : ""}
+        ${preset.oauth && !p ? "" : `<button class="primary" id="pe-save">${p ? "Speichern" : "Speichern & prüfen"}</button>`}
         ${p ? `<button class="ki" id="pe-verify">Verbindung prüfen</button><button class="ghost" id="pe-models">Modelle laden</button>` : ""}</div></div>
     </div>
     ${p ? `<div class="card stack"><div class="row spread"><h3 style="margin:0">Modelle (${models.length})</h3>
@@ -2062,9 +2130,20 @@ SUB["anbieter-edit"] = async (el) => {
       <div class="row" style="flex-wrap:nowrap"><input id="pe-manual" placeholder="Modell von Hand ergänzen (nur falls es in der Liste fehlt)">
         <button class="ghost" id="pe-add-model">Hinzufügen</button></div></div>` : ""}`;
   $("#back").onclick = () => { S.sub = p ? "anbieter" : "anbieter-neu"; render(); };
-  $("#pe-show").onclick = () => { const k = $("#pe-key"); k.type = k.type === "password" ? "text" : "password"; };
-  $("#pe-save").onclick = () => guard(async () => {
-    const body = { name: $("#pe-name").value, base_url: $("#pe-url").value, api_key: $("#pe-key").value };
+  if ($("#pe-show")) $("#pe-show").onclick = () => { const k = $("#pe-key"); k.type = k.type === "password" ? "text" : "password"; };
+  if ($("#pe-cglogin")) $("#pe-cglogin").onclick = (e) => guard(async () => {
+    let id = p && p.id;
+    if (!id) {
+      const r = await api("/api/settings/providers", { method: "POST", body: { name: $("#pe-name").value, preset: preset.id } });
+      id = S.editId = r.id;
+      S.settings = await api("/api/settings");
+    }
+    await chatgptLogin(id, e.target);
+  });
+  if ($("#pe-cgout")) $("#pe-cgout").onclick = () => confirm("Von ChatGPT abmelden? Die Anmeldung wird bei OpenAI widerrufen.") && guard(() => chatgptLogout(p.id));
+  if ($("#pe-save")) $("#pe-save").onclick = () => guard(async () => {
+    const body = { name: $("#pe-name").value };
+    if ($("#pe-url")) Object.assign(body, { base_url: $("#pe-url").value, api_key: $("#pe-key").value });
     if (p) {
       await api(`/api/settings/providers/${p.id}`, { method: "PUT", body }); toast("Gespeichert.", "ok"); render();
     } else {

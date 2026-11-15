@@ -28,6 +28,10 @@ PRESETS = [
     {"id": "openai", "name": "OpenAI", "type": "openai", "base_url": "https://api.openai.com/v1",
      "needs_key": True, "key_url": "https://platform.openai.com/api-keys",
      "info": "GPT-Modelle. Abgerechnet wird über Guthaben im OpenAI-Plattformkonto (nicht ChatGPT Plus)."},
+    {"id": "chatgpt", "name": "ChatGPT-Abo (Plus/Pro)", "type": "chatgpt", "base_url": "https://api.openai.com/v1",
+     "needs_key": False, "oauth": True, "key_url": "https://chatgpt.com/settings/usage",
+     "info": "Mit deinem ChatGPT-Konto anmelden statt API-Schlüssel. Die KI-Anfragen zählen auf das Kontingent "
+             "deines ChatGPT-Plus- oder -Pro-Abos (Limits legst du in ChatGPT fest)."},
     {"id": "anthropic", "name": "Anthropic (Claude)", "type": "anthropic", "base_url": "https://api.anthropic.com/v1",
      "needs_key": True, "key_url": "https://console.anthropic.com/settings/keys",
      "info": "Claude-Modelle. Konto in der Anthropic Console mit Guthaben (nicht das Claude-Abo)."},
@@ -174,7 +178,10 @@ def mask(key: str) -> str:
 
 
 def public_provider(p: dict) -> dict:
-    out = {k: v for k, v in p.items() if k != "api_key"}
+    out = {k: v for k, v in p.items() if k not in ("api_key", "oauth")}
+    if p.get("type") == "chatgpt":
+        from . import chatgpt
+        out["chatgpt"] = chatgpt.public_state(p)
     out["api_key_maskiert"] = mask(p.get("api_key", ""))
     out["api_key_gesetzt"] = bool(p.get("api_key"))
     out["models_count"] = len(p.get("models") or [])
@@ -211,7 +218,7 @@ def add_provider(data: dict) -> str:
     preset = PRESET_BY_ID.get(data.get("preset") or "custom")
     if preset is None:
         raise ValueError("Unbekannte Vorauswahl.")
-    base_url = _clean_url(data.get("base_url") or preset["base_url"])
+    base_url = _clean_url(preset["base_url"] if preset["type"] == "chatgpt" else data.get("base_url") or preset["base_url"])
     if not base_url.startswith(("http://", "https://")):
         raise ValueError("Bitte eine gültige Adresse eintragen (beginnt mit http:// oder https://).")
     provider = {
@@ -233,7 +240,7 @@ def update_provider(pid: str, data: dict) -> dict:
             if p["id"] == pid:
                 if "name" in data and data["name"].strip():
                     p["name"] = data["name"].strip()
-                if "base_url" in data:
+                if "base_url" in data and p.get("type") != "chatgpt":
                     url = _clean_url(data["base_url"])
                     if not url.startswith(("http://", "https://")):
                         raise ValueError("Bitte eine gültige Adresse eintragen.")
@@ -292,6 +299,11 @@ def _set_state(pid: str, **fields) -> None:
 def _headers(p: dict) -> dict:
     headers = {"Content-Type": "application/json", "User-Agent": "StoryWorld/1"}
     key = p.get("api_key", "")
+    if p["type"] == "chatgpt":
+        from . import chatgpt
+        headers["Authorization"] = f"Bearer {chatgpt.access_token(p)}"
+        headers["Accept"] = "text/event-stream, application/json"
+        return headers
     if p["type"] == "anthropic":
         headers["anthropic-version"] = "2023-06-01"
         if key:
@@ -311,6 +323,20 @@ _HTTP_HINTS = {401: "Schlüssel ungültig oder fehlt.", 403: "Schlüssel hat kei
 def _http_error(exc: urllib.error.HTTPError) -> ProviderError:
     detail = exc.read().decode("utf-8", "replace")[:300]
     return ProviderError(f"{_HTTP_HINTS.get(exc.code, 'Anbieter meldet einen Fehler.')} (HTTP {exc.code}) {detail}")
+
+
+def _chatgpt_http_error(exc: urllib.error.HTTPError) -> ProviderError:
+    from . import chatgpt
+    raw = exc.read().decode("utf-8", "replace")
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        payload = {"detail": raw}
+    err = payload.get("error") if isinstance(payload, dict) and isinstance(payload.get("error"), dict) else {}
+    detail = (err.get("message") or (payload.get("detail") if isinstance(payload, dict) else "") or "")
+    request_id = exc.headers.get("x-request-id", "") if exc.headers else ""
+    text = chatgpt.explain(str(err.get("code") or ""), str(err.get("param") or ""), exc.code, str(detail))
+    return ProviderError(text + (f" Request-ID {request_id}" if request_id else "") + f" (HTTP {exc.code})")
 
 
 # Python von python.org bringt ohne „Install Certificates.command“ keine Stammzertifikate mit.
@@ -355,6 +381,8 @@ def _open(p: dict, method: str, path: str, body: dict | None, timeout: int):
             return urllib.request.urlopen(request, timeout=timeout, context=_ssl_context())
         return urllib.request.urlopen(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
+        if p["type"] == "chatgpt":
+            raise _chatgpt_http_error(exc)
         raise _http_error(exc)
     except urllib.error.URLError as exc:
         raise ProviderError(f"Anbieter nicht erreichbar ({url}): {exc.reason}")
@@ -464,6 +492,12 @@ def _parse_models(payload) -> list:
 
 
 def fetch_models(p: dict) -> list:
+    if p["type"] == "chatgpt":  # Modellkatalog des angemeldeten Kontos: models[].slug, nur visibility "list"
+        payload = _request(p, "GET", "/models")
+        items = payload.get("models", payload.get("data", [])) if isinstance(payload, dict) else []
+        slugs = [i.get("slug") or i.get("id") for i in items if isinstance(i, dict)
+                 and i.get("visibility", "list") == "list" and (i.get("slug") or i.get("id"))]
+        return list(dict.fromkeys(slugs))  # Reihenfolge des Servers behalten
     path = "/models?limit=1000" if p["type"] == "anthropic" else "/models"
     return _parse_models(_request(p, "GET", path))
 
@@ -474,6 +508,10 @@ def verify(pid: str) -> dict:
     preset = PRESET_BY_ID.get(p.get("preset"), {})
     if preset.get("needs_key") and not p.get("api_key"):
         raise ProviderError("Für diesen Anbieter fehlt noch der API-Schlüssel.")
+    if p["type"] == "chatgpt":
+        from . import chatgpt
+        if not chatgpt.signed_in(p):
+            raise ProviderError("Noch nicht mit ChatGPT angemeldet – „Continue with ChatGPT“ drücken.")
     try:
         if p.get("preset") == "openrouter":
             info = _request(p, "GET", "/key").get("data", {})
@@ -583,9 +621,88 @@ def _adapt(body: dict, error: str) -> str | None:
     return None
 
 
+def _responses_body(model: str, messages: list, json_mode: bool) -> dict:
+    """Responses-API für das ChatGPT-Abo: store=false, stream=true, Systemtext als instructions, ganze Historie in
+    input, ohne temperature/max_output_tokens (vom Abo-Weg nicht erlaubt)."""
+    instructions = "\n\n".join(m["content"] for m in messages if m.get("role") in ("system", "developer"))
+    items = [{"role": m["role"] if m.get("role") in ("user", "assistant") else "user", "content": m["content"]}
+             for m in messages if m.get("role") not in ("system", "developer")]
+    body = {"model": model, "input": items or [{"role": "user", "content": ""}], "store": False, "stream": True}
+    if instructions:
+        body["instructions"] = instructions
+    if json_mode:
+        body["text"] = {"format": {"type": "json_object"}}
+    return body
+
+
+def _responses_stream(p: dict, body: dict, timeout: int, on_chunk) -> str:
+    """Liest den Event-Stream der Responses-API. Erfolgreich nur mit response.completed."""
+    from . import chatgpt
+    response = _open(p, "POST", "/responses", body, timeout)
+    parts, done = [], False
+    try:
+        with response:
+            event_name = ""
+            for raw in response:
+                line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                if line.startswith("event:"):
+                    event_name = line[6:].strip()
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    event = json.loads(payload)
+                except ValueError:
+                    continue
+                kind = event.get("type") or event_name
+                if kind == "response.output_text.delta":
+                    piece = event.get("delta") or ""
+                    if piece:
+                        parts.append(piece)
+                        if on_chunk:
+                            on_chunk(piece)
+                elif kind == "response.completed":
+                    done = True
+                    break
+                elif kind == "response.failed":
+                    err = ((event.get("response") or {}).get("error") or {})
+                    raise ProviderError(chatgpt.explain(str(err.get("code") or "unknown_error"), str(err.get("param") or ""),
+                                                        None, str(err.get("message") or "")))
+                elif kind == "response.incomplete":
+                    why = ((event.get("response") or {}).get("incomplete_details") or {}).get("reason") or "unbekannt"
+                    raise ProviderError(f"Antwort unvollständig abgebrochen (Grund „{why}“).")
+                elif kind == "error":
+                    err = event.get("error") if isinstance(event.get("error"), dict) else event
+                    raise ProviderError(chatgpt.explain(str(err.get("code") or ""), str(err.get("param") or ""), None,
+                                                        str(err.get("message") or "")))
+    except (TimeoutError, OSError) as exc:
+        raise ProviderError(f"Verbindung während der Antwort abgebrochen: {exc}")
+    if not done:
+        raise ProviderError("Stream endete ohne Abschluss (response.completed) – Antwort verworfen.")
+    text = "".join(parts)
+    if not text.strip():
+        raise ProviderError("Leere Antwort.")
+    return text
+
+
 def _chat_once(p: dict, model: str, messages: list, json_mode: bool, max_tokens: int, temperature: float,
                timeout: int, on_chunk=None, log=None) -> str:
     key = (p.get("base_url"), model)
+    if p["type"] == "chatgpt":
+        body = _responses_body(model, messages, json_mode and "ohne_json_modus" not in _ADAPT.get(("chatgpt", model), ()))
+        try:
+            return _responses_stream(p, body, timeout, on_chunk)
+        except ProviderError as exc:
+            if "text" in body and ("HTTP 400" in str(exc) or "unsupported_capability" in str(exc)):
+                _ADAPT.setdefault(("chatgpt", model), set()).add("ohne_json_modus")
+                if log:
+                    log("ChatGPT-Abo lehnt den JSON-Modus ab – neuer Versuch ohne", "warnung")
+                body.pop("text")
+                return _responses_stream(p, body, timeout, on_chunk)
+            raise
     if p["type"] == "anthropic":
         system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
         rest = [m for m in messages if m["role"] != "system"]

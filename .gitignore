@@ -43,6 +43,12 @@ unsloth-tmp/
 /systemuebersicht.*
 /user-journey.*
 
+# die Produktions bedingten files 
+PIPELINE.md
+ADR-001-update-mechanismus.md
+AENDERUNGEN.md
+DATENMODELL.md
+
 # Gedächtnis-Exporte (Arbeitsnotizen) – nur lokal
 /_gedaechtnis/
 

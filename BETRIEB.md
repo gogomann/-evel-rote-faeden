@@ -62,6 +62,20 @@ Aufgabenplanung → „Einfache Aufgabe erstellen“ → täglich 20:00 → Prog
 - Die Vorlage liegt als Kopie in `welten/vorlagen/<welt>.txt` (für „Vorlage auswerten“, falls der Steckbrief fehlt) und –
   mit gewähltem Menschen – unter dessen „Texte als Basis“ (eigener oder fremder Text).
 
+## ChatGPT-Abo statt API-Schlüssel
+- Einstellungen → KI-Anbieter → „+ Anbieter hinzufügen“ → **ChatGPT-Abo (Plus/Pro)** → „Continue with ChatGPT“.
+  Der Browser öffnet die Anmeldung bei OpenAI; nach dem Erlauben landet er auf `http://127.0.0.1:<port>/auth/callback`
+  der laufenden Oberfläche, die Modelle werden direkt geladen. Danach unter „Modelle je Aufgabe“ auswählen.
+- Ablauf nach OpenAIs Vorgaben für offene, lokal laufende Apps (Sign in with ChatGPT, `developers.openai.com/siwc`):
+  OAuth mit PKCE ohne Client-Geheimnis, Erst-Registrierung über `dynamic_agent_client`, danach die ausgestellte
+  Client-ID (`oaiapp_…`) je Anbieter. Host-ID (`chatgpt_host_id`) und Tokens liegen in `story_world.config.json` (0600).
+- Anfragen gehen an die Responses-API mit `store: false`, `stream: true`; Temperatur und Längenbegrenzung sind auf
+  diesem Weg nicht erlaubt und werden weggelassen. Zugangstoken (1 h) wird automatisch erneuert, Refresh-Token 30 Tage.
+- Limits (Wochenanteil je App, bei Plus 5-Stunden-Fenster über alle Apps) stellt man in ChatGPT ein:
+  https://chatgpt.com/settings/usage. Bei erreichtem Limit springt die 2./3. Wahl der Aufgabe ein.
+- „Abmelden“ widerruft die Sitzung bei OpenAI; Client-ID und Host-ID bleiben für die nächste Anmeldung.
+- Läuft die Oberfläche auf einem anderen Port (`--port`), funktioniert die Anmeldung genauso (nur der Port darf wechseln).
+
 ## Update
 - Einstellungen → Update: prüft Codeberg (`releases/latest`, sonst höchster Tag `vX.Y.Z`), zeigt die Release-Notizen,
   lädt das ZIP nach `_update/` und ersetzt nur Programmdateien, die sich geändert haben. Alte Fassungen und entfallene

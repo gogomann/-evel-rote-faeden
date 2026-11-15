@@ -1,8 +1,13 @@
-# evel-rote-faeden
+# ![icon](Logo/favicon/favicon-32x32.png) evel rote Fäden. Das Ende gefällt dir nicht?
+Dann schreib es weiter.
 
-**Deine Welten. Deine Geschichten. Deine Stimme.**
+Deine Lieblings Story Endet nicht wie **Du** es willst naja, lass es sich selbst Entwikeln. So das es für **Dich** ganz Neu ist.
+
 
 Ein Programm, das mit dir Geschichten, Serien und Hörbücher schreibt – und dabei lernt, wie *du* erzählst.
+
+## BYOK
+Das Programm ist BYOK (Bring Your Own Key), also damit entschiden Sie ob local oder Online LLM Sie nutzen. By OpnAi ist auch der OAuth möglich. 
 
 ---
 
@@ -32,3 +37,17 @@ Ein Programm, das mit dir Geschichten, Serien und Hörbücher schreibt – und d
 Updates kommen per Knopfdruck direkt in der App.
 
 Keine Programmierkenntnisse nötig.
+
+## unter der Motorhaube
+ZEIT_UND_STRAENGE.md
+## für die mehr wissen wollen
+
+Story World:  
+[Die Architektur](https://codeberg.org/gogomann/evel-rote-faeden/architektur.html)   
+[SQLite-Kernschema](https://codeberg.org/gogomann/evel-rote-faeden/datenbankschema.html)  
+[Systemübersicht](https://codeberg.org/gogomann/evel-rote-faeden/systemuebersicht.html)  
+[KI-Live-Datenfluss](https://codeberg.org/gogomann/evel-rote-faeden/event-stream.html)  
+[KI-Aufruf und Korrekturschleife](https://codeberg.org/gogomann/evel-rote-faeden/ki-aufrufschleife.html)  
+
+[So entsteht eine Folge](https://codeberg.org/gogomann/evel-rote-faeden/prozess.html)  
+[Vom Wunsch zur Geschichte](https://codeberg.org/gogomann/evel-rote-faeden/user-journey.html)  

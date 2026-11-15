@@ -339,3 +339,9 @@ svg.dim .n-n.hi circle { stroke-width: 5; }
 .story-list { margin: 0; padding-left: 18px; }
 .story-list li { margin: 4px 0; }
 tr.sel td { background: var(--accent-soft); }
+
+/* Sign in with ChatGPT: Knopf nach OpenAI-Vorgabe (schwarz, „Continue with ChatGPT“) */
+.chatgpt-btn { background: #000; color: #fff; border: 1px solid #000; border-radius: 999px; padding: 6px 14px; font-weight: 600; }
+.chatgpt-btn:hover { background: #222; }
+.chatgpt-btn:disabled { opacity: .6; }
+.cg-plan a { color: inherit; }

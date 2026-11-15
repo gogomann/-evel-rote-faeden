@@ -3,6 +3,12 @@
 Jede Version hat einen Abschnitt `## X.Y.Z – Kurztitel`. Nach einem Update zeigt Evel • Rote Fäden die Abschnitte
 seit der zuletzt genutzten Version als Hinweis an (auch nach manuellem ZIP-Entpacken).
 
+## 0.3.0 – Mit ChatGPT-Abo anmelden
+- Neuer KI-Anbieter „ChatGPT-Abo (Plus/Pro)“: Einstellungen → KI-Anbieter → „+ Anbieter hinzufügen“ → „Continue with ChatGPT“. Anmeldung im Browser, kein API-Schlüssel nötig; die Modelle werden danach automatisch geladen.
+- Die KI-Anfragen zählen auf das Kontingent deines ChatGPT-Abos. Wie viel diese App nutzen darf, stellst du in ChatGPT ein (Einstellungen → Nutzung). Ist das Limit erreicht, springt die 2./3. Wahl der Aufgabe ein.
+- Die Anmeldung erneuert sich selbst; „Abmelden“ beendet sie auch bei OpenAI. Die Zugangsdaten bleiben auf deinem Rechner.
+- Neue README.
+
 ## 0.2.0 – Update abgesichert
 - Wird ein Update hart unterbrochen (z. B. Stromausfall), stellt der nächste Start den vorherigen Stand automatisch wieder her und zeigt einen Hinweis.
 - Braucht eine neue Version ein neueres Python, wird sie nicht installiert – mit verständlichem Hinweis statt eines kaputten Programms.
