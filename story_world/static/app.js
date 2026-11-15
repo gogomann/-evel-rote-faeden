@@ -1,7 +1,7 @@
 "use strict";
 
 const S = { user: null, profilesMeta: null, zeitT: null, episodeId: null, runId: null, world: null, reveal: false, view: "uebersicht", cfg: null, entity: "peoples", jobsRunning: false, sub: "anbieter", settings: null,
-  place: null, person: null, open: new Set() };
+  place: null, person: null, open: new Set(), netzFokus: null };
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const STATUS_LABEL = { neu: "neu", in_arbeit: "KI arbeitet", vorschlag: "Vorschlag bereit", eingearbeitet: "eingearbeitet",
@@ -57,21 +57,68 @@ async function loadWorlds(select) {
 $("#world-select").addEventListener("change", (e) => { S.world = e.target.value; store("sw-world", S.world); S.place = S.person = null; S.open.clear(); render(); });
 $("#btn-new-world").addEventListener("click", newWorldDialog);
 
-function newWorldDialog() {
+async function newWorldDialog() {
+  const opt = await api("/api/vorlage/optionen").catch(() => null);
+  const radio = (name, items, first) => Object.entries(items).map(([k, l]) => `<label class="row small" style="gap:6px;text-transform:none;letter-spacing:0;font-weight:400">
+    <input type="radio" name="${name}" value="${k}" ${k === first ? "checked" : ""} style="width:auto"> ${esc(l)}</label>`).join("");
   modal(`<h2>Neue Welt</h2>
   <div class="form">
-    <div class="field"><label>Name</label><input id="nw-name" placeholder="z. B. Hauptwelt"></div>
-    <div class="field"><label>Grundidee / Beschreibung (optional)</label><textarea id="nw-desc"></textarea></div>
-    <div class="field row"><input type="checkbox" id="nw-seed" checked style="width:auto">
-      <span>Startbestand aus WELT_REGELN.md übernehmen (Menschen, Aureas, Weltregeln)</span></div>
+    <div class="field"><label>Name</label><input id="nw-name" placeholder="z. B. Hauptwelt – bei einer Vorlage sonst ihr Titel"></div>
+    <div class="field"><label>Grundidee / Beschreibung (optional)</label><textarea id="nw-desc" rows="2"></textarea></div>
+    <div class="field"><label>Womit beginnen?</label>
+      ${radio("nw-art", { leer: "Leer", beispiel: "Beispielbestand aus WELT_REGELN.md (Menschen, Aureas, Weltregeln)", vorlage: "Aus einem Buch oder einer Geschichte (Datei)" }, "beispiel")}</div>
+    <div id="nw-vorlage" class="stack hidden" style="border-left:3px solid var(--accent);padding-left:12px">
+      <div class="field"><label>Datei</label><input type="file" id="nw-file" accept="${opt ? opt.formate.join(",") : ""}">
+        <div class="small muted">${opt ? opt.formate.join(" ") : ""} – PDF nur mit installiertem „pdftotext“.</div></div>
+      <div class="field"><label>Titel der Vorlage (optional)</label><input id="nw-titel" placeholder="sonst Dateiname"></div>
+      <div class="field"><label>Wofür?</label>${opt ? radio("nw-modus", opt.modi, "start") : ""}
+        <div class="small muted" id="nw-modus-info"></div></div>
+      <div class="field"><label>Genre der Geschichten</label>${opt ? radio("nw-gmodus", opt.genre_modi, "fest") : ""}
+        <select id="nw-genre" style="margin-top:6px"><option value="">Genre der Vorlage automatisch erkennen</option>
+          ${opt ? opt.genres.map((g) => `<option>${esc(g)}</option>`).join("") : ""}</select></div>
+      <div class="field"><label>Wessen Text?</label>
+        ${radio("nw-wer", { eigen: "von mir geschrieben", fremd: "Text eines anderen Autors" }, "eigen")}
+        <input id="nw-autor" class="hidden" placeholder="Autor des Texts" style="margin-top:6px"></div>
+      <div class="note small">Die KI liest die Vorlage abschnittsweise ein (Figuren, Orte, Völker, Technik/Magie, Ereignisse,
+        Beziehungen) und erstellt danach einen Steckbrief: Genre, Zusammenfassung, Stand am Ende, Haupthandlung.
+        Das läuft im Hintergrund – bei einem ganzen Buch je nach Modell eine Weile. Fortschritt unter „KI-Läufe“.
+        ${S.user ? `Der Text wird bei <b>${esc(S.user.name)}</b> unter „Texte als Basis“ abgelegt.` : "Tipp: Mit gewähltem Menschen (oben rechts) wird der Text dort unter „Texte als Basis“ abgelegt."}</div>
+    </div>
   </div>
   <div class="row spread"><button class="ghost" data-close="1">Abbrechen</button>
   <button class="primary" id="nw-ok">Anlegen</button></div>`);
+  const val = (n) => (document.querySelector(`input[name="${n}"]:checked`) || {}).value;
+  const info = { start: "Das Buch ist der Ausgangspunkt – die Welt darf darüber hinaus wachsen.",
+    fortsetzung: "Die Welt ist gesetzt: Neue Folgen setzen nach dem Ende des Buchs an, die Welt wird nur erweitert, wo es nötig ist." };
+  const sync = () => {
+    $("#nw-vorlage").classList.toggle("hidden", val("nw-art") !== "vorlage");
+    if ($("#nw-modus-info")) $("#nw-modus-info").textContent = info[val("nw-modus")] || "";
+    $("#nw-autor").classList.toggle("hidden", val("nw-wer") !== "fremd");
+  };
+  document.querySelectorAll('#modal-box input[type="radio"]').forEach((r) => (r.onchange = sync));
+  sync();
   $("#nw-name").focus();
   $("#nw-ok").onclick = () => guard(async () => {
-    const r = await api("/api/worlds", { method: "POST", body: { name: $("#nw-name").value,
-      beschreibung: $("#nw-desc").value, startbestand: $("#nw-seed").checked } });
-    closeModal(); store("sw-world", r.slug); await loadWorlds(r.slug); toast("Welt angelegt.", "ok"); render();
+    const art = val("nw-art");
+    let r;
+    if (art === "vorlage") {
+      const f = $("#nw-file").files[0];
+      if (!f) throw new Error("Bitte eine Datei wählen.");
+      $("#nw-ok").disabled = true; $("#nw-ok").textContent = "Lese Datei …";
+      try {
+        r = await api("/api/worlds/vorlage", { method: "POST", body: { name: $("#nw-name").value, beschreibung: $("#nw-desc").value,
+          datei: f.name, daten_b64: b64(await f.arrayBuffer()), titel: $("#nw-titel").value, modus: val("nw-modus"),
+          genre_modus: val("nw-gmodus"), genre: $("#nw-genre").value, fremd: val("nw-wer") === "fremd", autor: $("#nw-autor").value,
+          profil_id: S.user ? S.user.id : null } });
+      } finally { $("#nw-ok").disabled = false; $("#nw-ok").textContent = "Anlegen"; }
+    } else {
+      r = await api("/api/worlds", { method: "POST", body: { name: $("#nw-name").value,
+        beschreibung: $("#nw-desc").value, startbestand: art === "beispiel" } });
+    }
+    closeModal(); store("sw-world", r.slug); await loadWorlds(r.slug);
+    if (r.job) { toast(`Welt angelegt – die KI liest die Vorlage ein (${r.teile} Abschnitt${r.teile === 1 ? "" : "e"}).`, "ok"); pollJobs(); }
+    else toast("Welt angelegt.", "ok");
+    go("uebersicht");
   });
 }
 
@@ -134,6 +181,22 @@ async function updateBadges() {
 
 // ------------------------------------------------------------ Übersicht
 
+const VORLAGE_MODUS = { start: "Welt aus der Vorlage gestartet", fortsetzung: "Fortsetzung der Vorlage" };
+function vorlageCard(o) {
+  const v = o.meta.vorlage;
+  if (!v) return "";
+  const genre = v.genre_name || "";
+  const status = v.status === "liest" ? '<span class="chip st-in_arbeit">KI liest die Vorlage ein …</span>'
+    : v.status === "analyse_fehlt" ? '<span class="chip st-fehler">Steckbrief fehlt</span> <button class="ki small" id="vl-analyse">Vorlage auswerten</button>'
+    : v.status === "fehler" ? '<span class="chip st-fehler">Einlesen fehlgeschlagen – siehe KI-Läufe</span>' : "";
+  return `<div class="card stack" style="margin-bottom:14px"><div class="row spread"><div><b>Vorlage: ${esc(v.titel || "")}</b>${v.autor ? ` <span class="muted">von ${esc(v.autor)}</span>` : ""}</div>
+      <div class="row small"><span class="chip">${esc(VORLAGE_MODUS[v.modus] || v.modus)}</span>
+        <span class="chip">${v.genre_modus === "fest" ? `Genre fest${genre ? `: ${esc(genre)}` : ""}` : "Genre frei"}</span>${status}</div></div>
+    ${v.zusammenfassung ? `<div class="small">${esc(v.zusammenfassung)}</div>` : ""}
+    ${v.modus === "fortsetzung" && v.ende ? `<div class="note small"><b>Stand am Ende – hier geht es weiter:</b> ${esc(v.ende)}</div>` : ""}
+    ${(v.offene_faeden || []).length ? `<div class="small muted">Offene Fäden: ${v.offene_faeden.map(esc).join(" · ")}</div>` : ""}</div>`;
+}
+
 VIEWS.uebersicht = async (el) => {
   const o = await api(W("/overview"));
   const b = o.bestand;
@@ -142,6 +205,7 @@ VIEWS.uebersicht = async (el) => {
   ${o.ki_eingerichtet ? "" : `<div class="banner"><span><b>Noch keine KI eingerichtet.</b> Pflegen geht schon – damit die KI Impulse einarbeitet und Lücken füllt, richte einen Anbieter ein (dauert zwei Minuten).</span>
     <button class="primary" data-setup="1">Jetzt einrichten</button></div>`}
   <div class="row spread"><h2>${esc(o.meta.name || S.world)}</h2><span class="muted">${esc(o.meta.beschreibung || "")}</span></div>
+  ${vorlageCard(o)}
   <div class="grid">
     <div class="card"><h3>Neuer Impuls</h3>
       <div class="form"><div class="field"><input id="q-title" placeholder="Titel, z. B. Schmuggler auf dem Mond Kesh"></div>
@@ -165,6 +229,9 @@ VIEWS.uebersicht = async (el) => {
     `<tr><td>${esc(t.world_time)}</td><td>${esc(t.title)}</td><td>${esc(t.location_id__name || "")}</td></tr>`).join("")}</table>`
     : '<div class="muted">Noch keine wichtigen Termine. Markiere Ereignisse als „Wichtiger Termin“.</div>'}</div>`;
   el.querySelectorAll("[data-go]").forEach((c) => (c.onclick = () => go(c.dataset.go)));
+  if ($("#vl-analyse")) $("#vl-analyse").onclick = () => guard(async () => {
+    await api(W("/vorlage/analyse"), { method: "POST", body: {} }); toast("Die KI wertet die Vorlage aus …"); pollJobs();
+  });
   el.querySelectorAll("[data-setup]").forEach((b) => (b.onclick = () => openSettings("anbieter")));
   el.querySelectorAll("[data-entity]").forEach((c) => c.dataset.entity !== "episodes" && (c.onclick = () => { S.entity = c.dataset.entity; go("welt"); }));
   $("#q-go").onclick = () => guard(async () => {
@@ -293,15 +360,18 @@ VIEWS.geschichten = async (el) => {
   const std = Number(o.meta.einstellungen.standard_genre || 0);
   const pick = S.storyPick || { art: "auto" };
   const genreBy = Object.fromEntries(st.genres.map((g) => [g.id, g]));
-  const story = (g) => `<div class="card click pick${pick.art === "strang" && pick.id === g.id ? " sel" : ""}" data-strang="${g.id}">
-      <div class="row spread"><b>${esc(g.title || `Strang ${g.id}`)}</b>${g.genre ? `<span class="chip">${esc(g.genre)}</span>` : ""}</div>
-      ${g.premise ? `<div class="small" style="margin-top:4px">${esc(g.premise.slice(0, 160))}${g.premise.length > 160 ? " …" : ""}</div>` : ""}
-      <div class="small muted" style="margin-top:6px">${g.folgen} Folge${g.folgen === 1 ? "" : "n"}${g.letzte ? ` · zuletzt: „${esc(g.letzte.title || "")}“` : " · noch nicht erzählt"}
-        ${g.zeit ? ` · ${esc(g.zeit)}` : ""}${g.letzte && g.letzte.age_rating ? ` · ${esc(g.letzte.age_rating)}` : ""}</div></div>`;
-  const genre = (g) => `<div class="card click pick${pick.art === "neu" && pick.genre === g.id ? " sel" : ""}" data-genre="${g.id}">
-      <div class="row spread"><b>${esc(g.name)}</b>${g.age_rating ? `<span class="chip">Vorgabe ${esc(g.age_rating)}</span>` : ""}</div>
-      <div class="small muted" style="margin-top:4px">${esc((g.description || "").slice(0, 140))}</div>
-      ${g.taboos ? `<div class="small warn-text" style="margin-top:6px" title="${esc(g.taboos)}">⚠ Tabus (Maus drüber)</div>` : ""}</div>`;
+  const vl = o.meta.vorlage;
+  const festGenre = vl && vl.genre_modus === "fest" && vl.genre_id && genreBy[vl.genre_id] ? genreBy[vl.genre_id] : null;
+  if (festGenre) st.genres = [festGenre];
+  const storyRow = (g) => `<tr class="click${pick.art === "strang" && pick.id === g.id ? " sel" : ""}" data-strang="${g.id}">
+      <td><b>${esc(g.title || `Strang ${g.id}`)}</b>${g.premise ? `<div class="small muted">${short(g.premise, 110)}</div>` : ""}</td>
+      <td>${esc(g.genre || "")}</td><td>${esc(g.status || "")}</td><td>${g.folgen}</td>
+      <td class="small">${g.letzte ? esc(g.letzte.title || "") : '<span class="muted">noch nicht erzählt</span>'}</td>
+      <td class="small muted">${esc(g.zeit || "")}</td></tr>`;
+  const genreRow = (g) => `<tr class="click${pick.art === "neu" && pick.genre === g.id ? " sel" : ""}" data-genre="${g.id}">
+      <td><b>${esc(g.name)}</b></td><td class="small">${short(g.description || "", 140)}</td>
+      <td>${g.age_rating ? esc(g.age_rating) : ""}</td>
+      <td class="small">${g.taboos ? `<span class="warn-text" title="${esc(g.taboos)}">⚠ Tabus</span>` : ""}</td></tr>`;
   el.innerHTML = `<div class="row spread"><h2>Geschichte wählen</h2><button class="ghost" id="gs-folgen">Alle Folgen →</button></div>
     <p class="muted">Erzähle eine bestehende Geschichte weiter oder beginne eine neue im gewünschten Genre. Die nächste Folge entsteht dann
       über Planer → Autor → Prüfer → Lektor → Archivar.</p>
@@ -316,15 +386,16 @@ VIEWS.geschichten = async (el) => {
           ${b.begruendung ? `<div class="small muted">${esc(b.begruendung)}</div>` : ""}
           <button class="ki" data-take="${set.id}:${i + 1}">Dieses Szenario erzählen</button></div>`; }).join("")}</div>
       <div class="row" style="justify-content:flex-end"><button class="ghost" data-drop="${set.id}">Alle verwerfen</button></div></div>`).join("")}
-    <h3>Weitererzählen</h3>
-    <div class="grid"><div class="card click pick${pick.art === "auto" ? " sel" : ""}" data-auto="1"><b>Planer entscheidet</b>
-      <div class="small muted" style="margin-top:4px">Die KI wählt den passenden Strang (oder beginnt einen neuen), Genre nach Strang oder Welt-Standard.</div></div>
-      ${st.geschichten.map(story).join("")}</div>
-    ${st.geschichten.length ? "" : '<p class="small muted">Noch keine Geschichten – wähle unten ein Genre, die KI legt den ersten Strang selbst an.</p>'}
-    <h3 style="margin-top:22px">Neue Geschichte beginnen</h3>
+    <div class="card" id="gs-form"></div>
+    <div class="row spread" style="margin-top:26px"><h3 style="margin:0">Geschichten <span class="muted">${st.geschichten.length || ""}</span></h3>
+      <span class="small muted">Klick öffnet die Geschichte: wer drin ist, wo sie spielt, wohin sie läuft.</span></div>
+    <div class="card" style="margin-top:8px">${st.geschichten.length
+      ? `<table class="liste"><tr><th>Geschichte</th><th>Genre</th><th>Status</th><th>Folgen</th><th>Zuletzt</th><th>Weltzeit</th></tr>${st.geschichten.map(storyRow).join("")}</table>`
+      : '<p class="small muted">Noch keine Geschichten – wähle ein Genre, die KI legt den ersten Strang selbst an.</p>'}</div>
+    <h3 style="margin-top:26px">Neue Geschichte beginnen – Genres</h3>
     <p class="small muted">⚠ Tabus der Genres sind Vorgaben – nicht jedes Modell hält sich daran. Verstöße erscheinen als Warnung an der Folge.</p>
-    <div class="grid">${st.genres.map(genre).join("")}</div>
-    <div class="card" id="gs-form" style="margin-top:22px"></div>`;
+    <div class="card">${st.genres.length ? `<table><tr><th>Genre</th><th>Kern</th><th>Vorgabe Alter</th><th>Tabus</th></tr>${st.genres.map(genreRow).join("")}</table>`
+      : '<p class="small muted">Noch keine Genres.</p>'}</div>`;
   const form = () => {
     const p = S.storyPick || { art: "auto" };
     const s = p.art === "strang" ? st.geschichten.find((x) => x.id === p.id) : null;
@@ -332,7 +403,15 @@ VIEWS.geschichten = async (el) => {
     const g = gid ? genreBy[gid] : null;
     const preset = (s && s.letzte && s.letzte.age_rating) || "";
     const title = p.art === "neu" ? `Neue Geschichte: ${esc(g ? g.name : "")}` : s ? `Weiter mit „${esc(s.title || "")}“` : "Nächste Folge – Planer entscheidet";
-    $("#gs-form").innerHTML = `<h3 style="margin-top:0">${title}</h3><div class="form">
+    const cur = p.art === "strang" ? `s:${p.id}` : p.art === "neu" ? `g:${p.genre}` : "auto";
+    $("#gs-form").innerHTML = `<div class="row spread"><h3 style="margin:0">${title}</h3>
+        ${s ? `<button class="ghost small" id="gs-info">Worum geht es? ↗</button>` : ""}</div>
+      <div class="form" style="margin-top:10px"><div class="field"><label>Grundlage</label><select id="gs-basis">
+        <option value="auto" ${cur === "auto" ? "selected" : ""}>Planer entscheidet (passende Geschichte oder neue)</option>
+        ${st.geschichten.length ? `<optgroup label="Weitererzählen">${st.geschichten.map((x) => `<option value="s:${x.id}" ${cur === `s:${x.id}` ? "selected" : ""}>${esc(x.title || `Strang ${x.id}`)} (${x.folgen} Folge${x.folgen === 1 ? "" : "n"})</option>`).join("")}</optgroup>` : ""}
+        ${st.genres.length ? `<optgroup label="Neue Geschichte im Genre">${st.genres.map((x) => `<option value="g:${x.id}" ${cur === `g:${x.id}` ? "selected" : ""}>Neu: ${esc(x.name)}</option>`).join("")}</optgroup>` : ""}
+        </select>${s && s.premise ? `<div class="small muted" style="margin-top:4px">${short(s.premise, 220)}</div>` : ""}</div></div>
+      <div class="form">
       <div class="field"><label>Wunsch (optional, keine feste Regel)</label>
         <textarea id="ep-wish" placeholder="z. B. etwas Ruhiges auf dem Mars, ein Wiedersehen, mehr Alltag der Raumfahrer …"></textarea></div>
       <details class="field"><summary class="small">Anfang · Mitte · Ende selbst vorgeben (optional, verbindlich)</summary>
@@ -343,7 +422,8 @@ VIEWS.geschichten = async (el) => {
           <div class="field"><label>Ende – womit die Folge zur Ruhe kommt</label><textarea id="ep-ende" rows="2"></textarea></div>
           <div class="small muted">Leer = der Planer entscheidet. Jede Folge beginnt ohnehin mit einer Figur, Gefühl, Lage und Ort.</div></div></details>
       <div class="row">
-        ${p.art === "neu" ? "" : `<div class="field" style="flex:1"><label>Genre dieser Folge</label><select id="ep-genre" style="width:100%">
+        ${festGenre ? `<div class="field" style="flex:1"><label>Genre</label><div class="small" style="padding:9px 0">🔒 ${esc(festGenre.name)} – durch die Vorlage festgelegt</div></div>`
+          : p.art === "neu" ? "" : `<div class="field" style="flex:1"><label>Genre dieser Folge</label><select id="ep-genre" style="width:100%">
           <option value="">${s && s.genre ? `wie die Geschichte (${esc(s.genre)})` : std ? `Welt-Standard (${esc((genreBy[std] || {}).name || "")})` : "automatisch"}</option>
           ${st.genres.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join("")}</select></div>`}
         <div class="field"><label>Altersfreigabe (legst du fest)</label><select id="ep-age">
@@ -368,6 +448,11 @@ VIEWS.geschichten = async (el) => {
         ${S.user ? `<b>${esc(S.user.name)}</b>` : "kein Profil gewählt – oben rechts „👤“"}.
         ${!vc.stimmen.length ? ' Noch keine Stimme angelegt – <a href="#" id="ep-to-stil">jetzt anlegen</a>.' : ""}</p></div>
       <div class="row" style="justify-content:flex-end"><button class="ki" id="ep-go">Folge erzeugen</button></div>`;
+    $("#gs-basis").onchange = (e) => {
+      const v = e.target.value;
+      choose(v === "auto" ? { art: "auto" } : v.startsWith("s:") ? { art: "strang", id: Number(v.slice(2)) } : { art: "neu", genre: Number(v.slice(2)) });
+    };
+    if ($("#gs-info")) $("#gs-info").onclick = () => storyDialog(s.id, choose);
     const upd = () => { $("#ep-min").textContent = `≈ ${Math.round(Number($("#ep-words").value) / 135)} Minuten Hörzeit. Für einen ersten Probelauf reichen 1500–2500 Wörter.`; };
     $("#ep-words").oninput = upd; upd();
     if ($("#ep-to-stil")) $("#ep-to-stil").onclick = (e) => { e.preventDefault(); S.stimmeNeu = true; go("stil"); };
@@ -386,16 +471,15 @@ VIEWS.geschichten = async (el) => {
       toast("Die Folge entsteht – Fortschritt oben rechts und unter „KI-Läufe“."); pollJobs();
     });
   };
-  const choose = (p) => {
+  const choose = (p, scroll = false) => {
     S.storyPick = p;
-    el.querySelectorAll(".pick").forEach((c) => c.classList.toggle("sel",
-      (p.art === "auto" && c.dataset.auto) || (p.art === "strang" && Number(c.dataset.strang) === p.id)
-      || (p.art === "neu" && Number(c.dataset.genre) === p.genre)));
+    el.querySelectorAll("[data-strang],[data-genre]").forEach((c) => c.classList.toggle("sel",
+      (p.art === "strang" && Number(c.dataset.strang) === p.id) || (p.art === "neu" && Number(c.dataset.genre) === p.genre)));
     form();
+    if (scroll) $("#gs-form").scrollIntoView({ behavior: "smooth", block: "start" });
   };
-  el.querySelectorAll("[data-auto]").forEach((c) => (c.onclick = () => choose({ art: "auto" })));
-  el.querySelectorAll("[data-strang]").forEach((c) => (c.onclick = () => choose({ art: "strang", id: Number(c.dataset.strang) })));
-  el.querySelectorAll("[data-genre]").forEach((c) => (c.onclick = () => { choose({ art: "neu", genre: Number(c.dataset.genre) }); $("#gs-form").scrollIntoView({ behavior: "smooth" }); }));
+  el.querySelectorAll("[data-strang]").forEach((c) => (c.onclick = () => storyDialog(Number(c.dataset.strang), (x) => choose(x, true))));
+  el.querySelectorAll("[data-genre]").forEach((c) => (c.onclick = () => choose({ art: "neu", genre: Number(c.dataset.genre) }, true)));
   $("#gs-folgen").onclick = () => go("folgen");
   el.querySelectorAll("[data-take]").forEach((b) => (b.onclick = () => guard(async () => {
     const [id, nr] = b.dataset.take.split(":");
@@ -409,6 +493,37 @@ VIEWS.geschichten = async (el) => {
   if (pick.art === "neu" && !genreBy[pick.genre]) S.storyPick = { art: "auto" };
   form();
 };
+
+async function storyDialog(id, onPick) {
+  const d = await api(W(`/stories/${id}`));
+  const sec = (t, body) => (body ? `<div class="story-sec"><h4>${t}</h4>${body}</div>` : "");
+  const chips = [d.genre, d.status, d.ebene && `Ebene ${d.ebene}`, d.massstab, d.zeit].filter(Boolean).map((c) => `<span class="chip">${esc(c)}</span>`).join("");
+  const figuren = d.figuren.length ? `<ul class="story-list">${d.figuren.map((f) => `<li><a href="#" data-fig="${f.id}"><b>${esc(f.anzeige)}</b></a>
+      ${f.pov ? '<span class="chip st-fertig">Erzählperspektive</span>' : ""}
+      <span class="small muted">${[f.role, f.volk, f.gender].filter(Boolean).map(esc).join(" · ")}</span></li>`).join("")}</ul>` : '<p class="small muted">Noch keine Figuren zugeordnet.</p>';
+  const orte = d.orte.length ? `<ul class="story-list">${d.orte.map((o) => `<li><a href="#" data-ort="${o.id}">${o.haupt ? `<b>${esc(o.name)}</b>` : esc(o.name)}</a>
+      ${o.haupt ? '<span class="chip">Hauptort</span>' : ""}${o.pfad !== o.name ? `<div class="small muted">${esc(o.pfad)}</div>` : ""}</li>`).join("")}</ul>` : '<p class="small muted">Kein Ort festgelegt.</p>';
+  const z = d.zuletzt;
+  const richtung = (d.praemisse ? `<p>${esc(d.praemisse)}</p>` : "")
+    + (z ? `<div class="small muted" style="margin-top:8px">Zuletzt: „${esc(z.titel || "")}“</div>${z.zusammenfassung ? `<p>${esc(z.zusammenfassung)}</p>` : ""}
+      ${z.uebergabe ? `<div class="note"><b>So endet es / hier geht es weiter:</b> ${esc(z.uebergabe)}</div>` : ""}` : '<p class="small muted">Noch keine Folge erzählt – die erste legt die Richtung fest.</p>')
+    + (d.ripples && d.ripples.length ? `<div class="small locked" style="margin-top:8px"><b>Backstage – kommt noch:</b><ul>${d.ripples.map((r) => `<li>${esc(r.wirkung)} <span class="muted">(ab Weltzeit ${esc(r.ab)})</span></li>`).join("")}</ul></div>` : "");
+  const folgen = d.folgen.length ? `<table class="small">${d.folgen.map((f) => `<tr class="click" data-goto-folge="${f.id}"><td style="width:60px">${f.form === "geschichte" ? "Gesch." : `Folge ${f.nr}`}</td>
+      <td><b>${esc(f.titel || "")}</b>${f.zusammenfassung ? `<div class="muted">${short(f.zusammenfassung, 160)}</div>` : ""}</td></tr>`).join("")}</table>` : "";
+  modal(`<div class="row spread"><h2 style="margin:0">${esc(d.titel || `Strang ${d.id}`)}</h2></div>
+    <div class="row small" style="margin:6px 0 4px">${chips}</div>
+    ${sec("Worum es geht und wohin es läuft", richtung)}
+    <div class="story-cols">${sec("Wer ist dabei", figuren)}${sec("Wo es spielt", orte)}</div>
+    ${sec(`Bisherige Folgen (${d.folgen.length})`, folgen)}
+    <div class="row spread" style="margin-top:14px"><button class="ghost" data-close="1">Schließen</button>
+      <button class="primary" id="sd-pick">Davon eine weitere Folge →</button></div>`);
+  $("#sd-pick").onclick = () => { closeModal(); onPick({ art: "strang", id: d.id }); };
+  document.querySelectorAll("#modal-box [data-fig]").forEach((a) => (a.onclick = (e) => {
+    e.preventDefault(); closeModal(); S.entity = "characters"; S.person = Number(a.dataset.fig); S.place = null; go("welt"); }));
+  document.querySelectorAll("#modal-box [data-ort]").forEach((a) => (a.onclick = (e) => {
+    e.preventDefault(); closeModal(); S.entity = "locations"; S.place = Number(a.dataset.ort); S.person = null; S.open.add(S.place); go("welt"); }));
+  document.querySelectorAll("#modal-box [data-goto-folge]").forEach((r) => (r.onclick = () => { closeModal(); go("folgen", Number(r.dataset.gotoFolge)); }));
+}
 
 async function episodeReader(el, id) {
   const f = await api(W(`/episodes/${id}`));
@@ -890,8 +1005,9 @@ VIEWS.stil = async (el) => {
       <div class="small" style="margin-top:6px">${Object.keys(v.steckbrief || {}).length ? "✔ Steckbrief" : "○ noch kein Steckbrief"}
         · ${v.probe && v.probe.freigegeben ? "✔ Probe freigegeben" : v.probe ? "○ Probe nicht freigegeben" : "○ keine Probe"}
         · ${v.messwerte ? "✔ Maßstab" : "○ kein Maßstab"}</div></div>`;
-  el.innerHTML = `<div class="row spread"><h2>Schreibstil</h2>
-      <button class="primary" id="st-new">+ Neue Stimme</button></div>
+  el.innerHTML = `<div class="row spread"><h2>Schreibstil</h2><div class="row">
+      <button class="ghost" id="st-import" title="Einen exportierten Schreibstil (Datei) übernehmen">⇧ Schreibstil importieren</button>
+      <button class="primary" id="st-new">+ Neue Stimme</button></div></div>
     <p class="muted">Eine <b>Stimme</b> ist der virtuelle Autor deiner Folgen – „schreibt wie Stanisław Lem“ oder „schreibt wie Ralf“
       auf Basis deiner eigenen Texte. Planer, Autor und Lektor schreiben danach, der Prüfer prüft dagegen, die Stil-Messung
       vergleicht mit deinen Texten oder der freigegebenen Probe. Es gilt: Folge vor Geschichte vor Welt.
@@ -905,10 +1021,47 @@ VIEWS.stil = async (el) => {
   el.querySelectorAll("[data-voice-back]").forEach((b) => (b.onclick = () => guard(async () => {
     await api(`/api/stimmen/${b.dataset.voiceBack}/archiv`, { method: "POST", body: { zurueck: true } }); S.stimme = b.dataset.voiceBack; render(); })));
   $("#st-new").onclick = () => { S.stimmeNeu = true; render(); };
+  $("#st-import").onclick = voiceImport;
   const box = $("#st-detail");
   if (S.stimmeNeu || !voices.length) return voiceNewForm(box, data);
   if (S.stimme) return voiceDetail(box, data, S.stimme, st, worldVoice);
 };
+
+async function voiceExport(vid) {
+  const file = await api("/api/stimmen/export", { method: "POST", body: { ids: [vid] } });
+  const name = file.stimmen[0].name.replace(/[^\wäöüÄÖÜß-]+/g, "-").replace(/^-+|-+$/g, "") || "stimme";
+  const blob = new Blob([JSON.stringify(file, null, 1)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `evel-schreibstil-${name}-${file.exportiert.slice(0, 10)}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast(`Schreibstil „${file.stimmen[0].name}“ exportiert.`, "ok");
+}
+
+function voiceImport() {
+  const input = document.createElement("input");
+  input.type = "file"; input.accept = ".json,application/json";
+  input.onchange = () => guard(async () => {
+    const f = input.files[0];
+    if (!f) return;
+    let daten;
+    try { daten = JSON.parse(await f.text()); } catch (e) { throw new Error("Die Datei ist kein gültiges JSON."); }
+    const r = await api("/api/stimmen/import", { method: "POST", body: { daten } });
+    const teile = [];
+    r.neu.forEach((n) => teile.push(`„${n}“ angelegt`));
+    r.umbenannt.forEach((x) => teile.push(`„${x.alt}“ gibt es schon – nicht überschrieben, angelegt als „${x.neu}“`));
+    r.vorhanden.forEach((n) => teile.push(`„${n}“ ist bereits genau so vorhanden – nichts geändert`));
+    if (r.verborgen) teile.push(`${r.verborgen} mit verborgenen Text-Auszügen`);
+    if (r.ungueltig) teile.push(`${r.ungueltig} ungültig übersprungen`);
+    modal(`<h2>Schreibstil importiert</h2><ul>${teile.map((t) => `<li>${esc(t)}</li>`).join("") || "<li>Nichts zu übernehmen.</li>"}</ul>
+      <div class="row" style="justify-content:flex-end"><button class="primary" data-close="1">OK</button></div>`);
+    S.stimmeNeu = false;
+    if (r.ids.length) S.stimme = r.ids[r.ids.length - 1];
+    render();
+  });
+  input.click();
+}
 
 function voiceNewForm(box, data) {
   const people = data.menschen || [];
@@ -967,6 +1120,7 @@ async function voiceDetail(box, data, vid, st, worldVoice) {
       <div class="small muted">${esc(ART_TEXT[v.art] || v.art)}${v.vorbild && v.art !== "frei" ? ` · ${esc(v.vorbild)}` : ""}
         ${v.ausgewertet ? ` · Steckbrief vom ${esc(v.ausgewertet)}${v.modell ? ` (${esc(v.modell)})` : ""}` : ""}</div></div>
       <div class="row"><button class="ki" id="vd-analyze">${Object.keys(v.steckbrief || {}).length ? "Steckbrief neu erstellen" : "Steckbrief erstellen"}</button>
+        <button class="ghost" id="vd-export" title="Diesen Schreibstil als Datei sichern">⇩ Exportieren</button>
         <button class="danger" id="vd-arch">Ins Archiv</button></div></div>
 
     <div class="card stack"><h3 style="margin:0">Basis</h3><div class="form">
@@ -1055,6 +1209,7 @@ async function voiceDetail(box, data, vid, st, worldVoice) {
   });
   if ($("#vd-ok")) $("#vd-ok").onclick = () => guard(async () => { await api(`${P}/probe/freigeben`, { method: "POST", body: { ok: true } }); toast("Probe ist jetzt Maßstab.", "ok"); render(); });
   if ($("#vd-unok")) $("#vd-unok").onclick = () => guard(async () => { await api(`${P}/probe/freigeben`, { method: "POST", body: { ok: false } }); render(); });
+  $("#vd-export").onclick = () => guard(() => voiceExport(v.id));
   $("#vd-arch").onclick = () => confirm(`„${v.name}“ ins Archiv legen?`) && guard(async () => { await api(`${P}/archiv`, { method: "POST", body: {} }); S.stimme = null; render(); });
   if ($("#vd-world-on")) $("#vd-world-on").onclick = () => guard(async () => { await api(W("/settings"), { method: "POST", body: { stimme: vid } }); toast("Welt-Standard gesetzt.", "ok"); render(); });
   if ($("#vd-world-off")) $("#vd-world-off").onclick = () => guard(async () => { await api(W("/settings"), { method: "POST", body: { stimme: "" } }); render(); });
@@ -1347,16 +1502,19 @@ async function placeView(main, id) {
 async function personView(main, id) {
   const d = await api(W(`/dossier/characters/${id}`));
   const f = d.figur, def = (o) => esc(JSON.stringify(o));
-  const rel = (list, title, emptyText) => sec(title, list, ["", "Name", "Seit", ""],
-    (r) => [esc(REL_LABEL[r.art] || r.art), esc(r.name), val(r.seit), `<button class="ghost small" data-edit="character_relations:${r.beziehung_id}">✎</button>`],
+  const rel = (list, title, emptyText) => sec(title, list, ["", "Name", "Grund", "Seit", "Bruch", ""],
+    (r) => [esc(REL_LABEL[r.art] || r.art), esc(r.name), `<span class="small">${val(r.grund)}</span>`, val(r.seit),
+      r.bruch != null ? `<span class="chip st-fehler">gebrochen ${esc(r.bruch)}</span>${r.bruch_grund ? `<div class="small muted">${esc(r.bruch_grund)}</div>` : ""}` : "",
+      `<button class="ghost small" data-edit="character_relations:${r.beziehung_id}">✎</button>`],
     (r) => `characters:${r.figur_id}`, "", emptyText);
   const told = [...d.straenge_pov.map((t) => ({ ...t, _wie: "Erzählperspektive" })), ...d.erwaehnt.straenge.map((t) => ({ ...t, _wie: "erwähnt" }))];
   main.innerHTML = `<div class="crumbs"><a href="#" data-crumb="1">Figuren</a> › <b>${esc(f.name)}</b></div>
     <div class="row spread"><div><h2 style="margin:0">${esc(f.name)}</h2>
-      <div class="row small" style="margin-top:4px">${f.role ? `<span class="chip">${esc(f.role)}</span>` : ""}
+      <div class="row small" style="margin-top:4px">${f.gender ? `<span class="chip">${esc(f.gender)}</span>` : ""}${f.role ? `<span class="chip">${esc(f.role)}</span>` : ""}
         ${f.people_id ? `Volk: ${openLink("peoples", f.people_id, f.people_id__name)}` : ""}
         ${f.location_id ? `· lebt in ${openLink("locations", f.location_id, f.location_id__name)}` : ""}</div></div>
-      <div class="row"><button class="ghost" data-edit="characters:${f.id}">Bearbeiten</button>
+      <div class="row"><button class="ghost" id="p-netz" title="Diese Figur im Beziehungsnetz zeigen">◉ Im Netz</button>
+        <button class="ghost" data-edit="characters:${f.id}">Bearbeiten</button>
         <button class="primary" data-add="jobs" data-def="${def({ character_id: f.id, location_id: f.location_id || undefined })}">+ Job</button>
         <button class="ghost" data-add="character_relations" data-def="${def({ character_id: f.id })}">+ Familie / Beziehung</button></div></div>
     ${f.description ? `<p class="desc">${esc(f.description)}</p>` : ""}
@@ -1374,6 +1532,21 @@ async function personView(main, id) {
     ${sec("Wissen", d.wissen, ["Seit", "Inhalt", "Quelle", "Status"], (r) => [val(r.since_world_time), esc(r.content), val(r.source), val(r.status)], (r) => `knowledge:${r.id}`)}
     </div>`;
   bindDossier(main);
+  $("#p-netz").onclick = () => { S.entity = "characters"; S.person = null; S.netzFokus = f.id; netzSetzen(true); render(); };
+}
+
+const short = (v, n = 90) => { const t = String(v ?? ""); return esc(t.length > n ? t.slice(0, n - 1) + "…" : t); };
+const personName = (r) => [r.first_name, r.last_name].filter((x) => x && String(x).trim()).join(" ") || r.name || "";
+const OPT_LABEL = { "character_relations.kind": REL_LABEL };
+
+function listCell(table, f, r) {
+  const v = r[f.name];
+  if (table === "characters" && f.name === "first_name" && !r.first_name && !r.last_name) return `<span class="muted">${esc(r.name)}</span>`;
+  if (f.type.startsWith("ref:")) return val(r[f.name + "__name"]);
+  if (table === "character_relations" && f.name === "ended_world_time" && v != null) return `<span class="chip st-fehler">gebrochen ${esc(v)}</span>`;
+  if (f.type.startsWith("select:")) return esc((OPT_LABEL[`${table}.${f.name}`] || {})[v] || v || "");
+  if (f.type === "bool") return v ? "ja" : "";
+  return short(v);
 }
 
 VIEWS.welt = async (el) => {
@@ -1385,7 +1558,9 @@ VIEWS.welt = async (el) => {
   const side = Object.entries(S.cfg.entities).map(([k, v]) =>
     `<button data-e="${k}" class="${k === S.entity && !detail ? "active" : ""}"><span>${esc(v.label)}</span><span>${o.bestand[k] ? o.bestand[k].offen : ""}</span></button>`
     + (k === "locations" && S.entity === "locations" ? placeTree(data.rows) : "")).join("");
-  const rows = data.rows.map((r) => `<tr class="click" data-id="${r.id}"><td>${esc(r.__title)}</td><td>${who(r.created_by)}
+  const cols = (cfg.list || []).map(([n, h]) => [cfg.fields.find((f) => f.name === n), h]).filter(([f]) => f);
+  const rows = data.rows.map((r) => `<tr class="click" data-id="${r.id}">${cols.length ? cols.map(([f]) => `<td>${listCell(S.entity, f, r)}</td>`).join("")
+      : `<td>${esc(r.__title)}</td>`}<td>${who(r.created_by)}
       ${r.visibility === "backstage" ? '<span class="chip backstage">backstage</span>' : ""}</td>
       <td>${r.__missing.length ? `<span class="chip gap">${r.__missing.length} Lücke(n)</span>` : '<span class="chip st-fertig">vollständig</span>'}</td></tr>`).join("");
   el.innerHTML = `<div class="split"><div><input id="w-search" placeholder="Suchen in allen Bereichen …" style="margin-bottom:10px">
@@ -1400,17 +1575,21 @@ VIEWS.welt = async (el) => {
     try { await placeView(main, S.place); } catch (e) { S.place = null; throw e; }
   } else if (S.entity === "characters" && S.person) {
     try { await personView(main, S.person); } catch (e) { S.person = null; throw e; }
+  } else if (NETZ_BEREICHE.has(S.entity) && netzAn()) {
+    await netzView(main);
   } else {
     main.innerHTML = `<div class="row spread"><h2>${esc(cfg.label)}</h2><div class="row">
+      ${NETZ_BEREICHE.has(S.entity) ? '<button class="ghost" id="w-netz" title="Verbindungen als Netz zeigen">◉ Netz</button>' : ""}
       ${S.entity === "snippets" ? '<button class="ki" id="w-snip">KI: Sammelsurium auffüllen</button>' : '<button class="ki" id="w-fill">KI: Lücken füllen</button>'}<button class="primary" id="w-new">+ ${esc(cfg.singular)}</button></div></div>
       ${S.entity === "locations" ? '<div class="small muted">Links im Baum einen Ort wählen, um alles zu sehen, was dazugehört.</div>' : ""}
       ${data.hidden ? `<div class="small locked">+ ${data.hidden} Einträge im Backstage verborgen</div>` : ""}
-      ${data.rows.length ? `<table><tr><th>Name</th><th>Herkunft</th><th>Steckbrief</th></tr>${rows}</table>` : '<div class="empty">Noch keine Einträge.</div>'}`;
+      ${data.rows.length ? `<table class="liste"><tr>${cols.length ? cols.map(([, h]) => `<th>${esc(h)}</th>`).join("") : "<th>Name</th>"}<th>Herkunft</th><th>Steckbrief</th></tr>${rows}</table>` : '<div class="empty">Noch keine Einträge.</div>'}`;
     main.querySelectorAll("tr[data-id]").forEach((tr) => (tr.onclick = () => {
       const id = Number(tr.dataset.id);
       if (S.entity === "locations" || S.entity === "characters") openItem(S.entity, id); else editDialog(S.entity, id);
     }));
     $("#w-new").onclick = () => editDialog(S.entity, null);
+    if ($("#w-netz")) $("#w-netz").onclick = () => { netzSetzen(true); render(); };
     if ($("#w-fill")) $("#w-fill").onclick = () => fillGaps(S.entity, null);
     if ($("#w-snip")) $("#w-snip").onclick = snippetDialog;
   }
@@ -1441,7 +1620,9 @@ function snippetDialog() {
 
 async function refOptions(table, current) {
   const { rows } = await api(W(`/rows/${table}`));
-  return `<option value="">—</option>` + rows.map((r) => `<option value="${r.id}" ${r.id === current ? "selected" : ""}>${esc(r.__title)}</option>`).join("");
+  const label = (r) => (table === "characters" ? `${personName(r)}${r.role ? ` (${r.role})` : ""}` : r.__title);
+  return `<option value="">—</option>` + rows.map((r) => [r, label(r)]).sort((a, b) => a[1].localeCompare(b[1], "de"))
+    .map(([r, l]) => `<option value="${r.id}" ${r.id === current ? "selected" : ""}>${esc(l)}</option>`).join("");
 }
 
 async function editDialog(table, id, defaults = {}) {
@@ -1458,11 +1639,15 @@ async function editDialog(table, id, defaults = {}) {
     let input;
     if (f.type === "textarea") input = `<textarea name="${f.name}">${esc(v)}</textarea>`;
     else if (f.type === "bool") input = `<select name="${f.name}"><option value="0">nein</option><option value="1" ${v ? "selected" : ""}>ja</option></select>`;
-    else if (f.type.startsWith("select:")) input = `<select name="${f.name}"><option value="">—</option>${f.type.slice(7).split(",").map((o) => `<option ${o === v ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+    else if (f.type.startsWith("select:")) {
+      const lab = OPT_LABEL[`${table}.${f.name}`] || {};
+      input = `<select name="${f.name}"><option value="">—</option>${f.type.slice(7).split(",").map((o) => `<option value="${esc(o)}" ${o === v ? "selected" : ""}>${esc(lab[o] || o)}</option>`).join("")}</select>`;
+    }
     else if (f.type.startsWith("ref:")) input = `<select name="${f.name}">${await refOptions(f.type.slice(4), v)}</select>`;
     else input = `<input name="${f.name}" type="${f.type === "number" ? "number" : "text"}" step="any" value="${esc(v)}">`;
     parts.push(`<div class="field ${f.secret ? "secret" : ""} ${missing.has(f.name) ? "gap" : ""}"><label>${esc(f.label)}${f.required ? " *" : ""}</label>${input}</div>`);
   }
+  if (table === "character_relations") parts.unshift('<div class="note rel-satz" id="rel-satz"></div>');
   if (S.reveal) parts.push(`<div class="field"><label>Sichtbarkeit</label><select name="visibility"><option value="offen">offen</option>
     <option value="backstage" ${row.visibility === "backstage" ? "selected" : ""}>backstage</option></select></div>`);
   modal(`<div class="row spread"><h2>${id ? esc(row.__title) : "Neu: " + esc(cfg.singular)}</h2>${id ? who(row.created_by) : ""}</div>
@@ -1470,6 +1655,17 @@ async function editDialog(table, id, defaults = {}) {
     <div class="row spread"><div class="row">${id ? `<button class="danger" id="ed-del">Löschen</button>` : ""}
       ${id && missing.size ? `<button class="ki" id="ed-fill">KI: Lücken hier füllen</button>` : ""}</div>
       <div class="row"><button class="ghost" data-close="1">Abbrechen</button><button class="primary" id="ed-save">Speichern</button></div></div>`);
+  if (table === "character_relations") {
+    const form = $("#ed");
+    const pick = (n) => { const x = form.elements[n]; return x && x.value ? x.options[x.selectedIndex].text : "…"; };
+    const satz = () => {
+      const bruch = form.elements.ended_world_time && form.elements.ended_world_time.value;
+      $("#rel-satz").innerHTML = `<b>${esc(pick("character_id"))}</b> ist <b>${esc(pick("kind"))}</b> von <b>${esc(pick("other_id"))}</b>`
+        + (bruch ? ` <span class="chip st-fehler">gebrochen seit ${esc(bruch)}</span>` : "");
+    };
+    ["character_id", "kind", "other_id", "ended_world_time"].forEach((n) => form.elements[n] && form.elements[n].addEventListener("input", satz));
+    satz();
+  }
   $("#ed-save").onclick = () => guard(async () => {
     const body = Object.fromEntries(new FormData($("#ed")).entries());
     if (id) await api(W(`/rows/${table}/${id}`), { method: "PUT", body });
@@ -2278,6 +2474,13 @@ async function showUpdateBanner() {
   const box = $("#update-banner");
   if (!st) return;
   const parts = [];
+  if (st.reparatur) {
+    const r = st.reparatur;
+    parts.push(r.fehler ? `<div><b>Ein Update wurde unterbrochen.</b> <span class="small">${esc(r.fehler)}</span></div>`
+      : `<div><b>Ein Update wurde unterbrochen</b> (z. B. Stromausfall). Der vorherige Stand ${esc(r.von)} ist wiederhergestellt –
+        du kannst das Update unter Einstellungen → Update erneut starten.
+        <div class="small muted">${r.wiederhergestellt} Dateien zurückgeholt, ${r.beiseitegelegt} beiseitegelegt in <code>${esc(r.sicherung)}</code>.</div></div>`);
+  }
   if (st.neu) {
     const secs = st.neu.abschnitte.map((a) => `<div style="margin-top:6px"><b>${esc(a.titel)}</b><div class="update-notes">${esc(a.text)}</div></div>`).join("");
     parts.push(`<div><b>Update installiert: ${esc(st.neu.von)} → ${esc(st.neu.nach)}</b>
@@ -2353,49 +2556,91 @@ const TTS_STATUS = { ok: "verbunden", fehler: "Fehler", ungeprueft: "nicht gepr�
 const GENDER = { female: "w", male: "m", w: "w", m: "m" };
 const voiceLabel = (v) => `${v.name}${GENDER[v.geschlecht] ? ` (${GENDER[v.geschlecht]})` : ""}`;
 
-function ttsServerForm(s, typen) {
-  s = s || { typ: "openai", max_zeichen: 400, timeout: 300 };
-  return `<div class="row">
+function ttsServerForm(s, typen, preset) {
+  preset = preset || {};
+  const isNew = !s;
+  const custom = !preset.id || preset.id === "custom";
+  s = s || { typ: preset.typ || "openai", name: custom ? "" : preset.name, base_url: preset.base_url || "", modell: preset.modell || "",
+    sprache: preset.sprache || "", max_zeichen: preset.max_zeichen || 400, timeout: 300 };
+  const needsKey = preset.needs_key || s.api_key_gesetzt;
+  const keyField = `<div class="field"><label>API-Schlüssel ${s.api_key_gesetzt ? `(gesetzt: ${esc(s.api_key_maskiert)})` : preset.needs_key ? "" : "(optional)"}</label>
+    <input data-f="api_key" type="password" autocomplete="off" placeholder="${s.api_key_gesetzt ? "leer = behalten" : preset.needs_key ? "hier einfügen" : ""}"></div>`;
+  const typField = `<div class="field"><label>Art</label><select data-f="typ">${typen.map((t) => `<option value="${t.id}" ${t.id === s.typ ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></div>`;
+  const dlId = `tm-${s.id || "neu"}`;
+  const dl = (s.modelle || []).length ? `<datalist id="${esc(dlId)}">${s.modelle.map((m) => `<option value="${esc(m)}">`).join("")}</datalist>` : "";
+  return `${isNew ? `<input type="hidden" data-f="preset" value="${esc(preset.id || "custom")}">` : ""}<div class="row">
       <div class="field"><label>Name</label><input data-f="name" value="${esc(s.name || "")}" placeholder="z. B. Phonon 40M"></div>
-      <div class="field"><label>Art</label><select data-f="typ">${typen.map((t) => `<option value="${t.id}" ${t.id === s.typ ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></div>
-      <div class="field" style="flex:2"><label>Adresse</label><input data-f="base_url" value="${esc(s.base_url || "")}" placeholder="http://192.168.1.50:8012"></div></div>
+      ${custom ? typField : ""}
+      <div class="field" style="flex:2"><label>Adresse</label><input data-f="base_url" value="${esc(s.base_url || "")}" placeholder="http://192.168.1.50:8012"></div>
+      ${needsKey ? keyField : ""}</div>
     <div class="row expert">
-      <div class="field"><label>Modell (leer = vom Server)</label><input data-f="modell" value="${esc(s.modell || "")}" placeholder="tts-1"></div>
+      ${custom ? "" : typField}
+      <div class="field"><label>Modell (leer = vom Server)</label><input data-f="modell" value="${esc(s.modell || "")}" placeholder="tts-1" ${dl ? `list="${esc(dlId)}"` : ""}>${dl}</div>
       <div class="field"><label>Sprache (leer = je Stimme)</label><input data-f="sprache" value="${esc(s.sprache || "")}" placeholder="de" style="max-width:90px"></div>
       <div class="field"><label>Max. Zeichen je Anfrage</label><input data-f="max_zeichen" type="number" min="50" max="5000" value="${esc(s.max_zeichen || 400)}" style="max-width:110px"></div>
       <div class="field"><label>Zeitlimit (s)</label><input data-f="timeout" type="number" min="10" max="3600" value="${esc(s.timeout || 300)}" style="max-width:100px"></div>
-      <div class="field"><label>API-Schlüssel ${s.api_key_gesetzt ? `(gesetzt: ${esc(s.api_key_maskiert)})` : "(optional)"}</label><input data-f="api_key" type="password" placeholder="${s.api_key_gesetzt ? "leer = behalten" : ""}"></div></div>`;
+      ${needsKey ? "" : keyField}</div>`;
+}
+
+function ttsGuide(p) {
+  const link = p.key_url ? `<a href="${esc(p.key_url)}" target="_blank" rel="noopener">${esc(p.key_url)}</a>` : "";
+  const steps = p.needs_key
+    ? ["Beim Anbieter ein Konto anlegen oder anmelden.",
+      `API-Schlüssel erstellen: ${link} – er wird oft nur einmal angezeigt, also gleich kopieren.`,
+      p.typ === "azure" ? "Region in der Adresse anpassen (steht in der Azure-Ressource unter „Schlüssel und Endpunkt“)." : "",
+      "Schlüssel unten einfügen und „Hinzufügen und prüfen“ drücken – die Stimmen werden geladen.",
+      "Danach in der Folge unter „Vertonung über TTS-Server“ die Stimmen besetzen."]
+    : p.id === "custom"
+      ? ["Adresse deines Servers eintragen (ohne /v1).", "„Hinzufügen und prüfen“ – die Stimmen werden vom Server geladen."]
+      : [`Programm installieren und starten: ${link}`, "Adresse ist vorausgefüllt – nur ändern, wenn der Server auf einem anderen Rechner oder Port läuft.",
+        "„Hinzufügen und prüfen“ – die Stimmen werden geladen."];
+  return `<div class="guide"><b>So geht’s – ${esc(p.name)}</b><p class="small" style="margin:4px 0">${esc(p.info)}</p>
+    <ol class="small">${steps.filter(Boolean).map((x) => `<li>${x}</li>`).join("")}</ol>
+    ${p.cloud ? `<p class="small muted" style="margin:6px 0 0">☁ Der Text der Folgen geht zum Vertonen an ${esc(p.name)}. Kosten entstehen dort je nach Zeichen. Der Schlüssel bleibt auf deinem Rechner.</p>` : ""}</div>`;
 }
 const readTtsForm = (root) => Object.fromEntries([...root.querySelectorAll("[data-f]")].map((i) => [i.dataset.f, i.value]).filter(([k, v]) => k !== "api_key" || v));
 
 SUB.tts = async (el) => {
   const t = await api("/api/tts");
+  const presetOf = (s) => t.presets.find((p) => p.id === (s.preset || "custom")) || {};
   const cards = t.server.map((s) => `<div class="card stack" data-srv="${s.id}">
-    <div class="row spread"><div><b>${esc(s.name)}</b> <span class="muted small">${esc(s.typ_name)}</span></div>${statusChip(s.status)}</div>
+    <div class="row spread"><div><b>${esc(s.name)}</b> <span class="muted small">${esc(s.preset_name && s.preset !== "custom" ? s.preset_name : s.typ_name)}</span>
+      ${s.cloud ? '<span class="chip" title="Der Text geht zum Vertonen an diesen Anbieter">☁ Cloud</span>' : ""}</div>${statusChip(s.status)}</div>
     <div class="small muted">${esc(s.base_url)}${s.modell ? ` · Modell ${esc(s.modell)}` : ""}${s.sprache || s.sprache_erkannt ? ` · Sprache ${esc(s.sprache || s.sprache_erkannt)}${s.sprache ? "" : " (vom Server)"}` : ""} · max. ${esc(s.max_zeichen)} Zeichen je Anfrage${s.geprueft_am ? ` · geprüft ${esc(s.geprueft_am)}` : ""}</div>
     ${s.last_error ? `<div class="err small">${esc(s.last_error)}</div>` : ""}
     <div class="row"><button class="ki" data-tverify="${s.id}">Prüfen &amp; Stimmen laden</button><button class="ghost" data-tedit="${s.id}">Bearbeiten</button>
       <button class="ghost" data-tarch="${s.id}">Archivieren</button></div>
-    <div class="hidden stack" data-teditbox="${s.id}">${ttsServerForm(s, t.typen)}<div class="row"><button class="primary" data-tsave="${s.id}">Speichern</button></div></div>
+    <div class="hidden stack" data-teditbox="${s.id}">${ttsServerForm(s, t.typen, presetOf(s))}<div class="row"><button class="primary" data-tsave="${s.id}">Speichern</button></div></div>
     ${s.stimmen_anzahl ? `<details><summary class="muted">${s.stimmen_anzahl} Stimmen – Hörprobe per ▶</summary>
       <div class="row small" style="margin:8px 0"><input data-tprobe-text placeholder="Probetext (leer = Standardsatz)"></div>
       <table>${s.stimmen.map((v) => `<tr><td>${esc(v.name)}</td><td class="small muted">${esc(v.sprache || "")}</td><td class="small muted">${esc(v.geschlecht || "")}</td>
         <td><button class="ghost" data-tplay="${esc(v.id)}">▶</button></td></tr>`).join("")}</table></details>` : ""}</div>`).join("");
+  const pre = S.ttsPreset ? t.presets.find((p) => p.id === S.ttsPreset) : null;
+  const newCard = pre
+    ? `<div class="card stack" id="t-new"><div class="row spread"><h3 style="margin:0">Neu: ${esc(pre.name)}</h3><button class="ghost" id="t-back">← andere Auswahl</button></div>
+        ${ttsGuide(pre)}${ttsServerForm(null, t.typen, pre)}
+        ${pre.id === "custom" ? `<p class="small muted">${t.typen.map((x) => `<b>${esc(x.name)}:</b> ${esc(x.info)}`).join("<br>")}</p>` : ""}
+        <div class="row"><button class="primary" id="t-add">Hinzufügen und prüfen</button></div></div>`
+    : `<div class="card stack" id="t-new"><h3 style="margin:0">TTS-Anbieter hinzufügen</h3>
+        <p class="small muted">Wähle einen Anbieter. Adresse und Einstellungen sind vorbereitet – bei Cloud-Anbietern brauchst du nur deinen Schlüssel.</p>
+        <div class="provider-grid">${t.presets.map((p) => `<button class="preset" data-tpreset="${p.id}"><b>${esc(p.name)}</b><span class="small muted">${esc(p.info)}</span>
+          <div class="small" style="margin-top:6px">${p.needs_key ? "🔑 Schlüssel nötig" : "Kein Schlüssel nötig"} · ${p.cloud ? "☁ Text geht an den Anbieter" : "🏠 bleibt bei dir"}</div></button>`).join("")}</div></div>`;
   el.innerHTML = `<div class="row spread"><h2>TTS-Server</h2></div>
     <p class="small muted">Eigene Sprach-Server für die Vertonung. Stimmen werden vom Server geladen; Besetzung und Modus (Hörspiel/Hörbuch)
       wählst du je Folge. Text wird in Stücke bis „max. Zeichen“ zerlegt und zu einer WAV-Datei zusammengefügt.
       Das Vorlesen im Browser und die macOS-Vertonung bleiben unverändert.</p>
     <div class="provider-grid">${cards || '<div class="muted small">Noch kein TTS-Server eingerichtet.</div>'}</div>
-    <div class="card stack" id="t-new"><h3 style="margin:0">TTS-Server hinzufügen</h3>${ttsServerForm(null, t.typen)}
-      <p class="small muted">${t.typen.map((x) => `<b>${esc(x.name)}:</b> ${esc(x.info)}`).join("<br>")}</p>
-      <div class="row"><button class="primary" id="t-add">Hinzufügen und prüfen</button></div></div>
+    ${newCard}
     ${t.archiv.length ? `<details><summary class="muted">Archiv (${t.archiv.length}) – entfernte Server, wiederherstellbar</summary>
       ${t.archiv.map((s) => `<div class="row spread card" style="margin-top:8px"><span>${esc(s.name)} <span class="muted small">${esc(s.base_url)} · archiviert ${esc(s.archiviert_am || "")}</span></span>
         <button class="ghost" data-trestore="${s.id}">Wiederherstellen</button></div>`).join("")}</details>` : ""}`;
-  $("#t-add").onclick = () => guard(async () => {
+  el.querySelectorAll("[data-tpreset]").forEach((b) => (b.onclick = () => { S.ttsPreset = b.dataset.tpreset; render(); }));
+  if ($("#t-back")) $("#t-back").onclick = () => { S.ttsPreset = null; render(); };
+  if ($("#t-add")) $("#t-add").onclick = () => guard(async () => {
     const r = await api("/api/tts/server", { method: "POST", body: readTtsForm($("#t-new")) });
+    S.ttsPreset = null;
     const v = await api(`/api/tts/server/${r.id}/pruefen`, { method: "POST", body: {} });
-    toast(v.ok ? `Verbunden – ${v.stimmen} Stimmen geladen.` : v.fehler, v.ok ? "ok" : "bad"); render();
+    toast(v.ok ? `Verbunden – ${v.stimmen} Stimmen geladen.` : `${v.fehler} – „Bearbeiten“ zum Korrigieren.`, v.ok ? "ok" : "bad"); render();
   });
   el.querySelectorAll("[data-tverify]").forEach((b) => (b.onclick = () => guard(async () => {
     b.disabled = true; b.textContent = "prüfe …";
@@ -2479,4 +2724,310 @@ async function ttsCard(id) {
     await api(W(`/episodes/${id}/tts/vertonen`), { method: "POST", body: {} });
     toast("Vertonung über TTS-Server läuft – Fortschritt oben rechts."); pollJobs();
   });
+}
+
+// ------------------------------------------------------------ Tabellen: Sortieren (Klick auf Spaltenkopf) & Filtern
+
+const TBL = {};          // Zustand je Tabelle (Ansicht + Spaltenköpfe): Sortierspalte, Richtung, Filtertext
+let tblFocus = null;     // Filterfeld, das beim Neuzeichnen den Fokus behalten soll
+
+function tblCompare(a, b, col, dir) {
+  const ta = (a.cells[col] ? a.cells[col].textContent : "").trim(), tb = (b.cells[col] ? b.cells[col].textContent : "").trim();
+  if (!ta || !tb) return ta ? -1 : tb ? 1 : 0;  // Leere immer ans Ende
+  const na = Number(ta.replace(",", ".")), nb = Number(tb.replace(",", "."));
+  const r = !isNaN(na) && !isNaN(nb) ? na - nb : ta.localeCompare(tb, "de", { numeric: true, sensitivity: "base" });
+  return r * dir;
+}
+
+function enhanceTable(t) {
+  const head = t.rows[0];
+  t.dataset.enh = "1";
+  if (!head || !head.cells.length || [...head.cells].some((c) => c.tagName !== "TH") || t.querySelector("td[colspan]")) return;
+  const rows = [...t.rows].slice(1);
+  if (rows.length < 2) return;
+  const key = `${S.view}|${S.entity}|${[...head.cells].map((c) => c.textContent.trim()).join("|")}`;
+  const st = (TBL[key] = TBL[key] || { col: -1, dir: 1, q: "" });
+  rows.forEach((r, i) => (r.dataset.ord = i));
+  const body = head.parentNode;
+  let info = null;
+  const apply = () => {
+    const order = [...rows].sort(st.col >= 0 ? (a, b) => tblCompare(a, b, st.col, st.dir) : (a, b) => a.dataset.ord - b.dataset.ord);
+    order.forEach((r) => body.appendChild(r));
+    const q = st.q.trim().toLowerCase();
+    let shown = 0;
+    rows.forEach((r) => { const hit = !q || r.textContent.toLowerCase().includes(q); r.style.display = hit ? "" : "none"; shown += hit ? 1 : 0; });
+    [...head.cells].forEach((c, i) => { c.classList.toggle("sort-asc", i === st.col && st.dir === 1); c.classList.toggle("sort-desc", i === st.col && st.dir === -1); });
+    if (info) info.textContent = q ? `${shown} von ${rows.length}` : "";
+  };
+  [...head.cells].forEach((c, i) => {
+    if (!c.textContent.trim()) return;
+    c.classList.add("sortable");
+    c.title = "Klicken: sortieren (auf-, absteigend, aus)";
+    c.onclick = () => { if (st.col !== i) { st.col = i; st.dir = 1; } else if (st.dir === 1) st.dir = -1; else st.col = -1; apply(); };
+  });
+  if (rows.length >= 5 || st.q || t.classList.contains("liste")) {  // Bereichslisten immer, sonst ab 5 Zeilen
+    const bar = document.createElement("div");
+    bar.className = "tfilter";
+    bar.innerHTML = `<input type="search" placeholder="Filtern …" value="${esc(st.q)}"><span class="small muted"></span>`;
+    t.parentNode.insertBefore(bar, t);
+    info = bar.querySelector("span");
+    const inp = bar.querySelector("input");
+    inp.oninput = () => { st.q = inp.value; apply(); };
+    inp.onfocus = () => (tblFocus = key);
+    inp.onblur = () => { if (document.contains(inp)) tblFocus = null; };
+    if (tblFocus === key) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+  }
+  if (st.col >= 0 || st.q) apply();
+}
+
+let tblFrame = null;
+new MutationObserver(() => {
+  if (tblFrame) return;
+  tblFrame = requestAnimationFrame(() => { tblFrame = null; document.querySelectorAll("#view table:not([data-enh])").forEach(enhanceTable); });
+}).observe($("#view"), { childList: true, subtree: true });
+
+// ------------------------------------------------------------ Beziehungsnetz (Figuren, Familie & Beziehungen)
+// Familien (über Familien-Beziehungen verbunden) liegen jeweils in einem eigenen Kreis; alle übrigen Beziehungen
+// verbinden die Bubbles quer. Pfeil = Leserichtung „A ist … von B“. Klick auf Bubble öffnet die Figur, Klick auf eine
+// Linie die Beziehung. Ziehen verschiebt Bubbles bzw. die Ansicht, Mausrad zoomt.
+
+const NETZ_BEREICHE = new Set(["characters", "character_relations"]);
+const FAMILIE = new Set(["elternteil", "kind", "partner", "geschwister", "grosselternteil", "enkel", "verwandt"]);
+const VOLK_FARBEN = ["#4e79a7", "#e8862a", "#59a14f", "#b07aa1", "#3f9f9a", "#c9a227", "#e0607e", "#9c755f", "#6b6ecf", "#7f8c2d"];
+const NETZ = { opt: { familie: true, andere: true, gebrochen: true, einzeln: true }, view: null, nodes: null };
+const netzAn = () => load(`sw-netz-${S.entity}`) === "1";
+const netzSetzen = (on) => store(`sw-netz-${S.entity}`, on ? "1" : "0");
+
+function netzLayout(nodes, edges) {
+  const byId = new Map(nodes.map((d) => [d.id, d]));
+  // Familiengruppen: Zusammenhangskomponenten über Familien-Kanten
+  const parent = new Map(nodes.map((d) => [d.id, d.id]));
+  const find = (x) => (parent.get(x) === x ? x : (parent.set(x, find(parent.get(x))), parent.get(x)));
+  edges.filter((e) => e.familie && !e.gebrochen).forEach((e) => parent.set(find(e.von), find(e.zu)));
+  const groups = new Map();
+  nodes.forEach((d) => { const g = find(d.id); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(d); });
+  const list = [...groups.values()].sort((a, b) => b.length - a.length || a[0].label.localeCompare(b[0].label, "de"));
+  list.forEach((members, gi) => {
+    const ang = gi * 2.39996, rad = 170 * Math.sqrt(gi), cx = Math.cos(ang) * rad, cy = Math.sin(ang) * rad;
+    members.forEach((d, i) => {
+      const a = (i / members.length) * Math.PI * 2, r = members.length > 1 ? 50 * Math.sqrt(members.length) : 0;
+      d.x = cx + Math.cos(a) * r; d.y = cy + Math.sin(a) * r; d.vx = d.vy = 0; d.g = gi;
+    });
+  });
+  const R = 40;
+  for (let it = 0; it < 350; it++) {
+    const cool = 1 - it / 400;
+    for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      let dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy || 0.01;
+      const f = (a.g === b.g ? 26000 : 18000) / d2, d = Math.sqrt(d2);
+      dx /= d; dy /= d; a.vx -= dx * f; a.vy -= dy * f; b.vx += dx * f; b.vy += dy * f;
+    }
+    edges.forEach((e) => {
+      const a = byId.get(e.von), b = byId.get(e.zu);
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const len = e.familie ? 175 : 280, k = e.familie ? 0.05 : 0.012, f = (d - len) * k;
+      a.vx += (dx / d) * f; a.vy += (dy / d) * f; b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+    });
+    list.forEach((m) => {
+      if (m.length < 2) return;
+      const cx = m.reduce((s, d) => s + d.x, 0) / m.length, cy = m.reduce((s, d) => s + d.y, 0) / m.length;
+      m.forEach((d) => { d.vx += (cx - d.x) * 0.02; d.vy += (cy - d.y) * 0.02; });
+    });
+    nodes.forEach((d) => {
+      d.vx -= d.x * 0.004; d.vy -= d.y * 0.004;
+      const sp = Math.hypot(d.vx, d.vy), max = 30 * cool + 2;
+      if (sp > max) { d.vx *= max / sp; d.vy *= max / sp; }
+      d.x += d.vx; d.y += d.vy; d.vx *= 0.55; d.vy *= 0.55;
+    });
+    netzKollision(nodes, 2 * R + 70);  // Platz für Beschriftungen zwischen den Bubbles
+  }
+  // Kreise (Familien und Einzelne) dürfen sich nicht überlappen
+  const circ = () => list.map((m) => {
+    const cx = m.reduce((s, d) => s + d.x, 0) / m.length, cy = m.reduce((s, d) => s + d.y, 0) / m.length;
+    return { m, cx, cy, r: Math.max(...m.map((d) => Math.hypot(d.x - cx, d.y - cy))) + R + (m.length > 1 ? 22 : 8) };
+  });
+  for (let it = 0; it < 80; it++) {
+    const cs = circ();
+    let moved = false;
+    for (let i = 0; i < cs.length; i++) for (let j = i + 1; j < cs.length; j++) {
+      const a = cs[i], b = cs[j];
+      let dx = b.cx - a.cx, dy = b.cy - a.cy, d = Math.hypot(dx, dy) || 0.01;
+      const over = a.r + b.r + 40 - d;
+      if (over <= 0) continue;
+      moved = true; dx /= d; dy /= d;
+      const wa = b.m.length / (a.m.length + b.m.length), wb = 1 - wa;
+      a.m.forEach((n) => { n.x -= dx * over * wa; n.y -= dy * over * wa; });
+      b.m.forEach((n) => { n.x += dx * over * wb; n.y += dy * over * wb; });
+      a.cx -= dx * over * wa; a.cy -= dy * over * wa; b.cx += dx * over * wb; b.cy += dy * over * wb;
+    }
+    if (!moved) break;
+  }
+  return list;
+}
+
+function netzKollision(nodes, min) {
+  for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+    const a = nodes[i], b = nodes[j];
+    let dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
+    if (d >= min) continue;
+    if (d < 0.01) { dx = 1; dy = 0; d = 1; }
+    const push = (min - d) / 2;
+    a.x -= (dx / d) * push; a.y -= (dy / d) * push; b.x += (dx / d) * push; b.y += (dy / d) * push;
+  }
+}
+
+function familienName(members) {
+  const count = {};
+  members.forEach((d) => { if (d.nachname) count[d.nachname] = (count[d.nachname] || 0) + 1; });
+  const best = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
+  return best ? `Familie ${best[0]}` : "Familie";
+}
+
+async function netzView(main) {
+  const [{ rows: figuren }, { rows: bez }, volk] = await Promise.all([api(W("/rows/characters")), api(W("/rows/character_relations")),
+    api(W("/rows/peoples"))]);
+  const farbe = {};
+  volk.rows.forEach((v, i) => (farbe[v.id] = VOLK_FARBEN[i % VOLK_FARBEN.length]));
+  const label = S.cfg.entities[S.entity].label;
+  main.innerHTML = `<div class="row spread"><h2>${esc(label)} <span class="muted small">· Netz</span></h2><div class="row">
+      <button class="ghost" id="n-liste">☰ Liste</button><button class="primary" id="n-new">+ Beziehung</button></div></div>
+    <div class="netz-bar small">
+      <label><input type="checkbox" data-o="familie" ${NETZ.opt.familie ? "checked" : ""}> Familie</label>
+      <label><input type="checkbox" data-o="andere" ${NETZ.opt.andere ? "checked" : ""}> weitere Beziehungen</label>
+      <label><input type="checkbox" data-o="gebrochen" ${NETZ.opt.gebrochen ? "checked" : ""}> gebrochene</label>
+      <label><input type="checkbox" data-o="einzeln" ${NETZ.opt.einzeln ? "checked" : ""}> Figuren ohne Verbindung</label>
+      <input type="search" id="n-such" placeholder="Figur hervorheben …" style="max-width:200px">
+      <button class="ghost small" id="n-fit">Einpassen</button></div>
+    <div class="netz-wrap" id="n-wrap"><svg id="n-svg" class="netz"><defs>
+      <marker id="n-pfeil" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="n-pfeil"/></marker>
+      </defs><g id="n-root"></g></svg></div>
+    <div class="netz-legende small">${volk.rows.map((v) => `<span><i style="border-color:${farbe[v.id]}"></i>${esc(v.name)}</span>`).join("")}
+      <span><i class="n-ohne"></i>ohne Volk</span><span class="n-l fam"></span>Familie<span class="n-l rel"></span>Beziehung<span class="n-l bruch"></span>gebrochen
+      <span class="muted">· Pfeil: „A ist … von B“ · Ziehen verschiebt · Mausrad zoomt · Klick öffnet</span></div>`;
+  $("#n-liste").onclick = () => { netzSetzen(false); S.netzFokus = null; render(); };
+  $("#n-new").onclick = () => editDialog("character_relations", null);
+  main.querySelectorAll("[data-o]").forEach((c) => (c.onchange = () => { NETZ.opt[c.dataset.o] = c.checked; zeichnen(true); }));
+
+  const svg = $("#n-svg"), root = $("#n-root");
+  let nodes = [], edges = [], groups = [], view = NETZ.view || { x: 0, y: 0, k: 1 }, fokus = S.netzFokus, such = "";
+
+  function aufbauen() {
+    const id2 = new Map(figuren.map((f) => [f.id, f]));
+    edges = bez.filter((b) => id2.has(b.character_id) && id2.has(b.other_id)).map((b) => ({
+      id: b.id, von: b.character_id, zu: b.other_id, art: b.kind, familie: FAMILIE.has(b.kind), gebrochen: b.ended_world_time != null,
+      grund: b.reason || "", seit: b.since_world_time, bruch: b.ended_world_time, bruchGrund: b.break_reason || "" }))
+      .filter((e) => (e.gebrochen ? NETZ.opt.gebrochen : true) && (e.familie ? NETZ.opt.familie : NETZ.opt.andere));
+    const verbunden = new Set(edges.flatMap((e) => [e.von, e.zu]));
+    nodes = figuren.filter((f) => NETZ.opt.einzeln || verbunden.has(f.id) || f.id === fokus).map((f) => ({
+      id: f.id, vorname: f.first_name || (!f.last_name ? f.name : ""), nachname: f.last_name || "", label: personName(f),
+      rolle: f.role || "", volk: f.people_id__name || "", farbe: f.people_id ? farbe[f.people_id] : null, geschlecht: f.gender || "" }));
+    const ids = new Set(nodes.map((d) => d.id));
+    edges = edges.filter((e) => ids.has(e.von) && ids.has(e.zu));
+    groups = netzLayout(nodes, edges);
+  }
+
+  const R = 40, byId = () => new Map(nodes.map((d) => [d.id, d]));
+  const cut = (t, n = 13) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
+  function zeichnen(neu) {
+    if (neu) aufbauen();
+    const m = byId(), out = [];
+    groups.filter((g) => g.length > 1).forEach((g) => {
+      const cx = g.reduce((s, d) => s + d.x, 0) / g.length, cy = g.reduce((s, d) => s + d.y, 0) / g.length;
+      const r = Math.max(...g.map((d) => Math.hypot(d.x - cx, d.y - cy))) + R + 22;
+      out.push(`<g class="n-fam"><circle cx="${cx}" cy="${cy}" r="${r}"/><text x="${cx}" y="${cy - r + 16}" text-anchor="middle">${esc(familienName(g))}</text></g>`);
+    });
+    const paar = {};
+    edges.forEach((e) => {
+      const a = m.get(e.von), b = m.get(e.zu), key = [e.von, e.zu].sort().join("-"), n = (paar[key] = (paar[key] || 0) + 1) - 1;
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, ux = dx / d, uy = dy / d;
+      const off = n * 18 * (n % 2 ? 1 : -1), nx = -uy * off, ny = ux * off;
+      const x1 = a.x + ux * R + nx, y1 = a.y + uy * R + ny, x2 = b.x - ux * (R + 3) + nx, y2 = b.y - uy * (R + 3) + ny;
+      const tip = `${a.label} ist ${REL_LABEL[e.art] || e.art} von ${b.label}` + (e.grund ? `\nGrund: ${e.grund}` : "")
+        + (e.seit != null ? `\nSeit: ${e.seit}` : "") + (e.gebrochen ? `\nGebrochen seit ${e.bruch}${e.bruchGrund ? `: ${e.bruchGrund}` : ""}` : "");
+      out.push(`<g class="n-e ${e.familie ? "fam" : "rel"} ${e.gebrochen ? "bruch" : ""}" data-e="${e.id}" data-a="${e.von}" data-b="${e.zu}"><title>${esc(tip)}</title>
+        <line class="hit" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/><line class="ln" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" marker-end="url(#n-pfeil)"/>
+        <text x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 4}" text-anchor="middle">${esc(REL_LABEL[e.art] || e.art)}${e.gebrochen ? " ✕" : ""}</text></g>`);
+    });
+    nodes.forEach((d) => {
+      const tip = `${d.label}${d.rolle ? ` – ${d.rolle}` : ""}${d.volk ? `\nVolk: ${d.volk}` : ""}${d.geschlecht ? `\n${d.geschlecht}` : ""}`;
+      const style = d.farbe ? `style="--vf:${d.farbe}"` : "";
+      out.push(`<g class="n-n ${d.id === fokus ? "fokus" : ""}" data-n="${d.id}" transform="translate(${d.x},${d.y})" ${style}><title>${esc(tip)}</title>
+        <circle r="${R}"/><text y="${d.nachname ? -3 : 4}" text-anchor="middle" class="vn">${esc(cut(d.vorname))}</text>
+        ${d.nachname ? `<text y="13" text-anchor="middle" class="nn">${esc(cut(d.nachname))}</text>` : ""}</g>`);
+    });
+    root.innerHTML = out.join("") || "";
+    if (!nodes.length) root.innerHTML = `<text x="0" y="0" text-anchor="middle" class="n-leer">Noch keine Figuren${figuren.length ? " mit diesen Filtern" : ""}.</text>`;
+    markieren();
+    setView();
+  }
+
+  const setView = () => root.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
+  function einpassen() {
+    const w = svg.clientWidth || 800, h = svg.clientHeight || 600;
+    if (!nodes.length) { view = { x: w / 2, y: h / 2, k: 1 }; return setView(); }
+    const pad = 90, xs = nodes.map((d) => d.x), ys = nodes.map((d) => d.y);
+    const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad, y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+    const k = Math.min(1.4, w / (x1 - x0), h / (y1 - y0));
+    view = { k, x: w / 2 - ((x0 + x1) / 2) * k, y: h / 2 - ((y0 + y1) / 2) * k };
+    const f = fokus && byId().get(fokus);
+    if (f) { view.k = Math.max(k, 0.9); view.x = w / 2 - f.x * view.k; view.y = h / 2 - f.y * view.k; }
+    setView();
+  }
+  function markieren(hover) {
+    const q = such.trim().toLowerCase();
+    const treffer = new Set(nodes.filter((d) => q && d.label.toLowerCase().includes(q)).map((d) => d.id));
+    const aktiv = hover != null ? new Set([hover]) : treffer.size ? treffer : fokus && byId().has(fokus) ? new Set([fokus]) : null;
+    svg.classList.toggle("dim", !!aktiv);
+    if (!aktiv) { root.querySelectorAll(".hi").forEach((x) => x.classList.remove("hi")); return; }
+    const nb = new Set(aktiv);
+    root.querySelectorAll(".n-e").forEach((g) => {
+      const on = aktiv.has(+g.dataset.a) || aktiv.has(+g.dataset.b);
+      g.classList.toggle("hi", on);
+      if (on) { nb.add(+g.dataset.a); nb.add(+g.dataset.b); }
+    });
+    root.querySelectorAll(".n-n").forEach((g) => g.classList.toggle("hi", nb.has(+g.dataset.n)));
+  }
+
+  // Ziehen, Zoomen, Klicken
+  let drag = null;
+  const pt = (ev) => { const r = svg.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
+  svg.onpointerdown = (ev) => {
+    const n = ev.target.closest(".n-n"), e = ev.target.closest(".n-e"), p = pt(ev);
+    drag = { node: n ? byId().get(+n.dataset.n) : null, edge: e ? +e.dataset.e : null, sx: p.x, sy: p.y, vx: view.x, vy: view.y, moved: false };
+    svg.setPointerCapture(ev.pointerId);
+  };
+  svg.onpointermove = (ev) => {
+    if (!drag) {
+      const n = ev.target.closest && ev.target.closest(".n-n");
+      if (!such.trim()) markieren(n ? +n.dataset.n : null);
+      return;
+    }
+    const p = pt(ev), dx = p.x - drag.sx, dy = p.y - drag.sy;
+    if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+    if (!drag.moved) return;
+    if (drag.node) {
+      drag.node.x += dx / view.k; drag.node.y += dy / view.k; drag.sx = p.x; drag.sy = p.y;
+      zeichnen(false);
+    } else { view.x = drag.vx + dx; view.y = drag.vy + dy; setView(); }
+  };
+  svg.onpointerup = () => {
+    const d = drag; drag = null;
+    NETZ.view = { ...view };
+    if (!d || d.moved) return;
+    if (d.node) openItem("characters", d.node.id);
+    else if (d.edge) editDialog("character_relations", d.edge);
+  };
+  svg.onpointerleave = () => { if (!drag && !such.trim()) markieren(null); };
+  svg.onwheel = (ev) => {
+    ev.preventDefault();
+    const p = pt(ev), k = Math.min(3, Math.max(0.15, view.k * (ev.deltaY < 0 ? 1.12 : 1 / 1.12)));
+    view.x = p.x - ((p.x - view.x) / view.k) * k; view.y = p.y - ((p.y - view.y) / view.k) * k; view.k = k;
+    NETZ.view = { ...view }; setView();
+  };
+  $("#n-such").oninput = (ev) => { such = ev.target.value; markieren(); };
+  $("#n-fit").onclick = () => { fokus = S.netzFokus = null; einpassen(); NETZ.view = { ...view }; zeichnen(false); };
+  zeichnen(true);
+  if (!NETZ.view || fokus) einpassen();
+  NETZ.view = { ...view };
 }

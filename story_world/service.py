@@ -64,6 +64,7 @@ RELATION_KINDS = ("elternteil", "kind", "partner", "geschwister", "grosselternte
                   "freund", "kollege", "mentor", "schueler", "rivale", "sonstiges")
 RELATION_INVERSE = {"elternteil": "kind", "kind": "elternteil", "grosselternteil": "enkel", "enkel": "grosselternteil",
                     "mentor": "schueler", "schueler": "mentor"}
+GENDERS = ("weiblich", "männlich", "divers", "anderes")
 FAMILY_KINDS = {"elternteil", "kind", "partner", "geschwister", "grosselternteil", "enkel", "verwandt"}
 # Wo die Grob-Ebene aus dem Maßstab folgt: Tabelle -> (Quellspalte, Ebenenspalte)
 EBENE_AUS = {"locations": ("kind", "level"), "threads": ("massstab", "level"), "events": ("massstab", "scale")}
@@ -183,8 +184,14 @@ ENTITIES: dict[str, dict[str, Any]] = {
     },
     "characters": {
         "label": "Figuren", "singular": "Figur", "title": "name",
+        # Anzeige in Verweisen (z. B. Beziehungen): „Vorname Nachname“, sonst der Name
+        "ref_title": ("first_name", "last_name"),
+        "list": [["first_name", "Vorname"], ["last_name", "Nachname"], ["gender", "Geschlecht"], ["people_id", "Volk"]],
         "fields": [
-            ("name", "Name", "text", True, False),
+            ("first_name", "Vorname", "text", False, False),
+            ("last_name", "Nachname", "text", False, False),
+            ("name", "Name (Ruf-/Anzeigename; leer = Vorname Nachname)", "text", True, False),
+            ("gender", "Geschlecht", "select:" + ",".join(GENDERS), False, False),
             ("people_id", "Volk", "ref:peoples", False, False),
             ("role", "Rolle", "text", False, False),
             ("location_id", "Lebt in (Ort)", "ref:locations", False, False),
@@ -196,11 +203,16 @@ ENTITIES: dict[str, dict[str, Any]] = {
     "character_relations": {
         "label": "Familie & Beziehungen", "singular": "Beziehung", "title": "kind",
         "title_fmt": "{character_id__name} ist {kind} von {other_id__name}",
+        "list": [["character_id", "Figur"], ["kind", "ist … von"], ["other_id", "Bezugsfigur"], ["reason", "Grund"],
+                 ["since_world_time", "Seit"], ["ended_world_time", "Bruch"]],
         "fields": [
             ("character_id", "Figur", "ref:characters", True, False),
             ("kind", "ist … von", "select:" + ",".join(RELATION_KINDS), True, False),
             ("other_id", "Bezugsfigur", "ref:characters", True, False),
+            ("reason", "Grund der Verbindung", "textarea", False, False),
             ("since_world_time", "Seit (Weltzeit)", "number", False, False),
+            ("ended_world_time", "Bruch seit (Weltzeit, leer = besteht)", "number", False, False),
+            ("break_reason", "Grund des Bruchs", "textarea", False, False),
             ("description", "Beschreibung", "textarea", False, False),
         ],
         "gaps": [],
@@ -511,17 +523,46 @@ def _visible_ids(conn: sqlite3.Connection, table: str) -> set:
     return {r[0] for r in conn.execute(f"SELECT id FROM {table} WHERE visibility = 'offen'")}
 
 
+def compose_name(*parts: Any) -> str:
+    return " ".join(str(p).strip() for p in parts if not _empty(p))
+
+
 def _ref_names(conn: sqlite3.Connection, reveal: bool) -> dict:
     names = {}
     for table in ENTITIES:
         title = ENTITIES[table]["title"]
-        rows = conn.execute(f"SELECT id, {title} AS t, visibility FROM {table}").fetchall()
+        extra = ENTITIES[table].get("ref_title") or ()
+        cols = "".join(f", {c}" for c in extra)
+        rows = conn.execute(f"SELECT id, {title} AS t, visibility{cols} FROM {table}").fetchall()
         names[table] = {
-            r["id"]: (_title(table, {"id": r["id"], title: r["t"]})
+            r["id"]: (_title(table, {"id": r["id"], title: compose_name(*(r[c] for c in extra)) or r["t"]})
                       if reveal or r["visibility"] == "offen" else "🔒 verborgen")
             for r in rows
         }
     return names
+
+
+def _derive_name(table: str, data: dict, current: Any = None, follow: bool = True) -> dict:
+    """Figuren: Name aus Vor- und Nachname bilden, wenn er leer ist. Ändert der Nutzer Vor-/Nachname und war der Name
+    bisher genau „Vorname Nachname“, zieht er mit. Beim Lückenfüllen (follow=False) bleibt ein vorhandener Name stehen."""
+    if table != "characters":
+        return data
+    cur = dict(current) if current is not None else {}
+    merged = {**cur, **data}
+    composed = compose_name(merged.get("first_name"), merged.get("last_name"))
+    if not composed:
+        return data
+    sent = data.get("name")
+    if isinstance(sent, str):
+        sent = sent.strip()
+    if current is None or _empty(cur.get("name")):
+        return dict(data, name=composed) if _empty(sent) else data
+    if _empty(sent) and "name" in data:
+        return dict(data, name=composed)
+    if follow and {"first_name", "last_name"} & set(data) and (_empty(sent) or sent == cur["name"]) \
+            and cur["name"] == compose_name(cur.get("first_name"), cur.get("last_name")):
+        return dict(data, name=composed)
+    return data
 
 
 def _project(table: str, row: dict, reveal: bool, refs: dict) -> dict:
@@ -607,7 +648,7 @@ def gaps(conn: sqlite3.Connection, reveal: bool = False) -> dict:
 def create_row(conn: sqlite3.Connection, table: str, data: dict, actor: str = "nutzer",
                visibility: str = "offen", reveal: bool = False) -> int:
     fields = _field_map(table)
-    data = _derive_level(table, dict(data))
+    data = _derive_name(table, _derive_level(table, dict(data)))
     values = {}
     for column, spec in fields.items():
         if spec[4] and not reveal and actor == "nutzer":
@@ -642,7 +683,7 @@ def update_row(conn: sqlite3.Connection, table: str, row_id: int, data: dict, ac
     current = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (row_id,)).fetchone()
     if current is None or (not reveal and actor == "nutzer" and current["visibility"] != "offen"):
         raise LookupError("Datensatz nicht gefunden.")
-    data = _derive_level(table, dict(data), current)
+    data = _derive_name(table, _derive_level(table, dict(data), current), current, follow=not only_empty)
     changes, skipped = {}, []
     for column, value in data.items():
         if column not in fields:
@@ -1110,7 +1151,8 @@ def character_dossier(conn: sqlite3.Connection, character_id: int, reveal: bool 
         if not reveal and other_name == "🔒 verborgen":
             continue
         entry = {"beziehung_id": r["id"], "art": kind, "figur_id": other, "name": other_name,
-                 "seit": r.get("since_world_time"), "beschreibung": r.get("description")}
+                 "seit": r.get("since_world_time"), "beschreibung": r.get("description"), "grund": r.get("reason"),
+                 "bruch": r.get("ended_world_time"), "bruch_grund": r.get("break_reason")}
         (family if kind in FAMILY_KINDS else relations).append(entry)
     jobs = sorted([j for j in data["jobs"] if j["character_id"] == character_id],
                   key=lambda j: (j.get("from_world_time") is None, j.get("from_world_time") or 0))
@@ -1146,6 +1188,14 @@ def meta(conn: sqlite3.Connection) -> dict:
     out = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM world_meta")
            if not r["key"].startswith("setting.")}
     out["einstellungen"] = {k: setting(conn, k) for k in SETTINGS}
+    if "vorlage" in out:  # Welt aus einem Buch/einer Geschichte (vorlage.py)
+        try:
+            out["vorlage"] = json.loads(out["vorlage"])
+            gid = out["vorlage"].get("genre_id")
+            row = conn.execute("SELECT name FROM genres WHERE id = ?", (gid,)).fetchone() if gid else None
+            out["vorlage"]["genre_name"] = row[0] if row else ""
+        except (ValueError, AttributeError):
+            out.pop("vorlage")
     return out
 
 

@@ -181,6 +181,98 @@ class TTSTests(unittest.TestCase):
         self.assertEqual(tts.get_server(sid)["status"], "fehler")
 
 
+class FakeCloud(BaseHTTPRequestHandler):
+    """Antwortet wie ElevenLabs (xi-api-key, PCM) und OpenAI (Bearer, feste Stimmen)."""
+    requests: list = []
+
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, data, ctype):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path == "/v1/voices" and self.headers.get("xi-api-key") == "EL":
+            return self._send(200, json.dumps({"voices": [{"voice_id": "v1", "name": "Rachel", "category": "premade",
+                                                           "labels": {"gender": "female"}}]}).encode(), "application/json")
+        if self.path == "/v1/models" and self.headers.get("xi-api-key") == "EL":
+            return self._send(200, json.dumps([{"model_id": "eleven_multilingual_v2", "can_do_text_to_speech": True}]).encode(),
+                              "application/json")
+        if self.path == "/v1/models" and self.headers.get("Authorization") == "Bearer OA":
+            return self._send(200, json.dumps({"data": [{"id": "gpt-4o-mini-tts"}, {"id": "gpt-5"}]}).encode(), "application/json")
+        self._send(401, b'{"detail": "invalid key"}', "application/json")
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        FakeCloud.requests.append((self.path, body))
+        if self.path.startswith("/v1/text-to-speech/v1?output_format=pcm_24000"):
+            return self._send(200, struct.pack("<2400h", *([1000] * 2400)), "audio/pcm")
+        if self.path == "/v1/audio/speech":
+            return self._send(200, wav_int16_streaming(0.1), "audio/wav")
+        self._send(404, b"{}", "application/json")
+
+
+class PresetTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), FakeCloud)
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+        cls.url = f"http://127.0.0.1:{cls.httpd.server_address[1]}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old = os.environ.get("STORY_CONFIG")
+        os.environ["STORY_CONFIG"] = os.path.join(self.tmp.name, "c.json")
+        FakeCloud.requests.clear()
+
+    def tearDown(self):
+        if self.old is None:
+            os.environ.pop("STORY_CONFIG", None)
+        else:
+            os.environ["STORY_CONFIG"] = self.old
+        self.tmp.cleanup()
+
+    def test_preset_defaults_and_missing_key(self):
+        sid = tts.add_server({"preset": "elevenlabs"})
+        s = tts.get_server(sid)
+        self.assertEqual((s["typ"], s["base_url"], s["name"], s["modell"]),
+                         ("elevenlabs", "https://api.elevenlabs.io", "ElevenLabs", "eleven_multilingual_v2"))
+        result = tts.verify(sid)
+        self.assertFalse(result["ok"])
+        self.assertIn("Schlüssel", result["fehler"])
+        self.assertIn("presets", tts.public_settings())
+
+    def test_elevenlabs_voices_and_pcm_to_wav(self):
+        sid = tts.add_server({"preset": "elevenlabs", "base_url": self.url, "api_key": "EL"})
+        self.assertTrue(tts.verify(sid)["ok"])
+        s = tts.get_server(sid)
+        self.assertEqual(s["stimmen"][0]["id"], "v1")
+        self.assertEqual(s["stimmen"][0]["geschlecht"], "female")
+        self.assertEqual(s["modelle"], ["eleven_multilingual_v2"])
+        rate, samples = tts.decode_wav(tts.synth(s, "Hallo", "v1", None))
+        self.assertEqual((rate, len(samples)), (24000, 2400))
+        self.assertEqual(FakeCloud.requests[-1][1], {"text": "Hallo", "model_id": "eleven_multilingual_v2"})
+        bad = tts.add_server({"preset": "elevenlabs", "base_url": self.url, "api_key": "falsch"})
+        self.assertFalse(tts.verify(bad)["ok"])
+
+    def test_openai_fixed_voices_without_language(self):
+        sid = tts.add_server({"preset": "openai", "base_url": self.url, "api_key": "OA"})
+        self.assertTrue(tts.verify(sid)["ok"])
+        s = tts.get_server(sid)
+        self.assertIn("nova", [v["id"] for v in s["stimmen"]])
+        self.assertEqual(s["modelle"], ["gpt-4o-mini-tts"])
+        tts.synth(s, "Hallo", "nova", "de")
+        self.assertNotIn("language", FakeCloud.requests[-1][1])
+
+
 if __name__ == "__main__":
     unittest.main()
 

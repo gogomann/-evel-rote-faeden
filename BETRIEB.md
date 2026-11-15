@@ -47,6 +47,21 @@ Aufgabenplanung → „Einfache Aufgabe erstellen“ → täglich 20:00 → Prog
 - Nichts wird gelöscht: Überholtes kommt nach `_old/`, ersetzte Audio-WAVs nach `welten/audio/<welt>/_wav/`,
   entfernte KI-Anbieter ins Archiv der Einstellungen, Nachrichtenquellen werden deaktiviert statt gelöscht.
 
+## Welt aus einem Buch oder einer Geschichte
+- „+ Neue Welt“ → „Aus einem Buch oder einer Geschichte“: Datei wählen (.txt .md .html .docx .odt .epub .rtf, .pdf nur mit
+  `pdftotext`), dazu **Wofür?** und **Genre**:
+  - **Welt damit starten**: Das Buch ist Ausgangspunkt, die Welt darf darüber hinaus wachsen. Die Handlung des Buchs wird
+    als beendeter Strang (Vorgeschichte) angelegt.
+  - **Fortsetzung**: Die Welt ist gesetzt. Folgen setzen nach dem Ende an; neue Völker, Systeme oder große Schauplätze nur,
+    wenn eine Geschichte es zwingend braucht. Die Haupthandlung wird als aktiver Strang mit „Stand am Ende“ angelegt.
+  - **Im Genre bleiben**: Alle Folgen bleiben im Genre der Vorlage (erkannt oder vorgegeben), im Creator gesperrt.
+    **Genre frei**: Genre je Folge wählbar.
+- Ablauf im Hintergrund: Abschnitte als Impulse „text“ einarbeiten → Steckbrief (Genre, Zusammenfassung, Ton, Stand am Ende,
+  offene Fäden, Haupthandlung) → Zeit-Cursor hinter das letzte Ereignis. Kein Beispielbestand aus WELT_REGELN.md; die
+  Datei WELT_REGELN.md geht bei solchen Welten auch nicht an die KI.
+- Die Vorlage liegt als Kopie in `welten/vorlagen/<welt>.txt` (für „Vorlage auswerten“, falls der Steckbrief fehlt) und –
+  mit gewähltem Menschen – unter dessen „Texte als Basis“ (eigener oder fremder Text).
+
 ## Update
 - Einstellungen → Update: prüft Codeberg (`releases/latest`, sonst höchster Tag `vX.Y.Z`), zeigt die Release-Notizen,
   lädt das ZIP nach `_update/` und ersetzt nur Programmdateien, die sich geändert haben. Alte Fassungen und entfallene
@@ -57,12 +72,31 @@ Aufgabenplanung → „Einfache Aufgabe erstellen“ → täglich 20:00 → Prog
 - Nach dem Neustart zeigt ein Hinweis, was neu ist (`AENDERUNGEN.md`) und welche Welten ein neues Schema bekommen haben.
 - Beim Start wird höchstens einmal am Tag still nach Updates gesehen (abschaltbar unter Einstellungen → Update).
 - Ein Ordner mit `.git/` (Entwicklerstand) wird nie per Update überschrieben – dort `git pull`.
+- **Unterbrochenes Update** (Stromausfall, Absturz): Vor dem ersten Kopiervorgang liegt `_update/laufend.json`.
+  Findet der nächste Start (Oberfläche, CLI oder MCP) dieses Journal verwaist vor, stellt `story_world/_reparatur.py`
+  den alten Stand aus `_old/update-…` wieder her, legt neu angelegte Dateien nach `…/_abgebrochen/` und zeigt einen
+  Hinweis. Danach lässt sich das Update erneut starten. Ergebnis in `_update/reparatur.json`.
+- **Python zu alt:** Braucht eine neue Version ein neueres Python (`__min_python__` in `story_world/__init__.py`),
+  bricht das Update vor dem ersten Kopiervorgang mit einem Hinweis ab; das Programm bleibt unverändert.
+
+### Notfall: zurück zur Vorversion
+1. Story World beenden (Fenster schließen bzw. „Story World beenden“).
+2. Im Programmordner: `python3 -m story_world update --zurueck` (Windows: `py -3 -m story_world update --zurueck`).
+   Holt die Dateien aus dem neuesten `_old/update-<alt>-nach-<installiert>-…/` zurück. Der heutige Stand wandert nach
+   `_old/zurueck-<installiert>-nach-<alt>-…/`, die Update-Sicherung bleibt erhalten (erneutes Update möglich).
+3. Welten, die das Update schon auf ein neueres Schema gebracht hat, öffnet die alte Version nicht (Fehlermeldung,
+   keine Datenänderung). Der Befehl listet sie mit der passenden Sicherung `welten/backups/<welt>-vor-v<N>-….sqlite3` auf.
+   Diese über Einstellungen → Sicherung → „Als neue Welt öffnen“ wiederherstellen. Was nach dem Update in der Welt
+   entstanden ist, fehlt in der Sicherung – dafür die neuere Version weiter nutzen.
+4. Ohne Terminal geht es auch von Hand: die Dateien aus `_old/update-…/` in den Programmordner zurückkopieren
+   (gleiche Unterordner, vorhandene Dateien ersetzen).
 
 ### Neue Version veröffentlichen
 1. `__version__` in `story_world/__init__.py` erhöhen (z. B. `0.2.0`) und in `AENDERUNGEN.md` einen Abschnitt `## 0.2.0 – …` ergänzen.
-2. Schemaänderungen nur als neue Migration in `migrations.py` (`LATEST_VERSION` + `_migrate_to_N`), nie bestehende ändern.
-3. Committen, Tag setzen und pushen: `git tag v0.2.0 && git push origin main v0.2.0`.
-4. Auf Codeberg zum Tag ein Release anlegen; der Beschreibungstext erscheint im Update-Dialog. Tag und `__version__` müssen
+2. Braucht die Version ein neueres Python, `__min_python__` in `story_world/__init__.py` anheben.
+3. Schemaänderungen nur als neue Migration in `migrations.py` (`LATEST_VERSION` + `_migrate_to_N`), nie bestehende ändern.
+4. Committen, Tag setzen und pushen: `git tag v0.2.0 && git push origin main v0.2.0`.
+5. Auf Codeberg zum Tag ein Release anlegen; der Beschreibungstext erscheint im Update-Dialog. Tag und `__version__` müssen
    übereinstimmen, sonst bricht das Update ab.
 
 ## Export und Umzug

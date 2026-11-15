@@ -9,6 +9,7 @@
   python3 -m story_world neu "Name der Welt" [--leer]
   python3 -m story_world migrate pfad.sqlite3 Datei auf aktuelles Schema bringen (mit Backup)
   python3 -m story_world update [--nur-pruefen]  Programm von Codeberg aktualisieren (Daten bleiben unberührt)
+  python3 -m story_world update --zurueck     Notfall: Stand vor dem letzten Update wiederherstellen
   python3 -m story_world pfad.sqlite3         wie bisher: Basisschema anlegen/ergänzen
 """
 
@@ -79,8 +80,26 @@ def main() -> None:
     elif command == "update":
         parser = argparse.ArgumentParser(prog="story_world update")
         parser.add_argument("--nur-pruefen", action="store_true")
+        parser.add_argument("--zurueck", action="store_true", help="Stand vor dem letzten Update wiederherstellen")
         opts = parser.parse_args(args[1:])
         from . import update
+        if opts.zurueck:
+            from .web import _already_running
+            if _already_running(8765):
+                sys.exit("Story World läuft noch – bitte erst beenden (Fenster schließen bzw. „Story World beenden“).")
+            try:
+                report = update.zurueck()
+            except update.UpdateError as exc:
+                sys.exit(str(exc))
+            print(f"Zurück auf {report['nach']} (von {report['von']}): {report['wiederhergestellt']} Dateien wiederhergestellt, "
+                  f"{report['beiseitegelegt']} beiseitegelegt. Der bisherige Stand liegt in {report['sicherung']}.")
+            for world in report["welten"]:
+                print(f"  ⚠ {world['welt']}: Schema {world['schema']}, Version {report['nach']} kennt nur bis {world['kennt']}. "
+                      + (f"Sicherung von vor dem Update: welten/backups/{world['sicherung']} "
+                         "(Einstellungen → Sicherung → „Als neue Welt öffnen“)." if world["sicherung"]
+                         else "Keine passende Sicherung gefunden – Welt mit der neueren Version weiter nutzen."))
+            print("Bitte Story World neu starten. Die automatische Update-Prüfung bietet die neuere Version weiter an.")
+            return
         try:
             info = update.check()
             if not info["neuer"]:

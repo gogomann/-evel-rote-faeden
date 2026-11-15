@@ -31,7 +31,7 @@ from pathlib import Path
 
 from .database import initialize
 
-LATEST_VERSION = 16
+LATEST_VERSION = 17
 
 # Schemaänderungen bestehender Welten seit Programmstart – für den Hinweis in der Oberfläche nach einem Update.
 REPORTS: list = []
@@ -509,6 +509,25 @@ def _migrate_to_16(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE episodes ADD COLUMN form TEXT NOT NULL DEFAULT 'folge'")
 
 
+def _migrate_to_17(connection: sqlite3.Connection) -> None:
+    """Figuren: Vorname, Nachname, Geschlecht. Beziehungen: Grund, Bruch (Weltzeit) und Grund des Bruchs."""
+    cols = _columns(connection, "characters")
+    for name in ("first_name", "last_name", "gender"):
+        if name not in cols:
+            connection.execute(f"ALTER TABLE characters ADD COLUMN {name} TEXT")
+    # Bestehende Namen aufteilen: erstes Wort = Vorname, Rest = Nachname (nur wo noch nichts eingetragen ist)
+    for row_id, name in connection.execute(
+            "SELECT id, name FROM characters WHERE first_name IS NULL AND last_name IS NULL").fetchall():
+        parts = str(name or "").split(None, 1)
+        if parts:
+            connection.execute("UPDATE characters SET first_name = ?, last_name = ? WHERE id = ?",
+                               (parts[0], parts[1] if len(parts) > 1 else None, row_id))
+    cols = _columns(connection, "character_relations")
+    for name, sql in (("reason", "TEXT"), ("ended_world_time", "REAL"), ("break_reason", "TEXT")):
+        if name not in cols:
+            connection.execute(f"ALTER TABLE character_relations ADD COLUMN {name} {sql}")
+
+
 def _migrate_to_3(connection: sqlite3.Connection) -> None:
     connection.execute(_V3_TECHNOLOGIES)
     if "perspective_of_episode_id" not in _columns(connection, "episodes"):
@@ -574,6 +593,8 @@ def migrate(connection: sqlite3.Connection, db_path: Path | None = None) -> dict
             _migrate_to_15(connection)
         if version < 16:
             _migrate_to_16(connection)
+        if version < 17:
+            _migrate_to_17(connection)
         connection.execute(f"PRAGMA user_version = {LATEST_VERSION}")
         connection.execute("COMMIT")
     except Exception:

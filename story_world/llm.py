@@ -68,9 +68,17 @@ Nur diese Tabellen und Spalten sind erlaubt:
 """
 
 
-def _read_context_docs() -> str:
+def _read_context_docs(conn: sqlite3.Connection | None = None) -> str:
+    """Projektdokumente. Bei Welten aus einer Vorlage (Buch) entfällt WELT_REGELN.md – sie beschreibt die Beispielwelt."""
     parts = []
+    skip = set()
+    if conn is not None:
+        from . import vorlage
+        if vorlage.get(conn):
+            skip.add("WELT_REGELN.md")
     for name in CONTEXT_FILES:
+        if name in skip:
+            continue
         path = ROOT / name
         if path.exists():
             parts.append(f"===== {name} =====\n{path.read_text(encoding='utf-8')}")
@@ -78,11 +86,11 @@ def _read_context_docs() -> str:
 
 
 def build_messages(conn: sqlite3.Connection, task: str) -> list:
-    world = service.meta(conn)
+    from . import vorlage
     canon = json.dumps(service.canon_snapshot(conn), ensure_ascii=False, separators=(",", ":"))
     user = (
-        f"WELT: {world.get('name', '')}\n{world.get('beschreibung', '')}\n\n"
-        f"PROJEKTDOKUMENTE:\n{_read_context_docs()}\n\n"
+        f"{vorlage.world_header(conn)}\n\n"
+        f"PROJEKTDOKUMENTE:\n{_read_context_docs(conn)}\n\n"
         f"AKTUELLER KANON (JSON, inkl. backstage):\n{canon}\n\n"
         f"AUFTRAG:\n{task}"
     )

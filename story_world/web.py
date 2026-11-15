@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import austausch, audio, tts, daily, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, stimmen, szenarien, update, vergleich, worlds
+from . import austausch, audio, tts, daily, vorlage, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, stimmen, szenarien, update, vergleich, worlds
 
 STATIC = Path(__file__).with_name("static")
 FAVICON = STATIC / "favicon"
@@ -151,6 +151,68 @@ def post_world(req, body):
     return {"slug": slug}
 
 
+@route("GET", "/api/vorlage/optionen")
+def get_vorlage_options(req, body):
+    return {"modi": vorlage.MODI, "genre_modi": vorlage.GENRE_MODI, "genres": [g["name"] for g in genres.PRESETS],
+            "formate": list(textimport.FORMATS)}
+
+
+@route("POST", "/api/worlds/vorlage")
+def post_world_from_text(req, body):
+    """Neue Welt aus einem Buch / einer Geschichte: als Start oder als Fortsetzung, Genre fest oder frei."""
+    modus, genre_modus = str(body.get("modus") or ""), str(body.get("genre_modus") or "")
+    if modus not in vorlage.MODI or genre_modus not in vorlage.GENRE_MODI:
+        raise HTTPError(400, "Bitte wählen: Start oder Fortsetzung und Genre fest oder frei.")
+    datei = str(body.get("datei") or "")
+    text = str(body.get("text") or "")
+    if body.get("daten_b64"):
+        try:
+            data = base64.b64decode(body["daten_b64"], validate=True)
+        except (ValueError, TypeError):
+            raise HTTPError(400, "Datei konnte nicht übertragen werden.")
+        try:
+            text = textimport.extract(datei, data)
+        except textimport.ImportError_ as exc:
+            raise HTTPError(400, str(exc))
+    text = text.strip()
+    if len(text) < 300:
+        raise HTTPError(400, "Die Vorlage ist zu kurz – bitte ein Buch oder eine Geschichte mit etwas Umfang wählen.")
+    titel = str(body.get("titel") or "").strip() or (datei.rsplit(".", 1)[0] if datei else "") or str(body.get("name") or "")
+    name = str(body.get("name") or "").strip() or titel
+    slug = worlds.create_world(name, str(body.get("beschreibung") or ""), False)  # kein Beispiel-Startbestand
+    with worlds.open_world(slug) as conn:
+        row = conn.execute("SELECT id FROM genres WHERE name = ?", (str(body.get("genre") or ""),)).fetchone()
+        try:
+            vorlage.start(conn, titel, modus, genre_modus, datei, len(text), row[0] if row else None,
+                          titel_vorgabe=bool(str(body.get("titel") or "").strip()),
+                          name_vorgabe=bool(str(body.get("name") or "").strip()))
+        except vorlage.VorlageError as exc:
+            raise HTTPError(400, str(exc))
+    vorlage.store_text(slug, text)
+    pid, tid, fremd = str(body.get("profil_id") or ""), None, bool(body.get("fremd"))
+    if pid and profiles.get(pid):
+        try:  # als „Text als Basis“ beim Menschen ablegen – Besitz (eigener/fremder Text) bleibt nachvollziehbar
+            tid = profiles.add_text(pid, titel, text, f"Vorlage der Welt „{name}“", False, fremd=fremd,
+                                    autor=str(body.get("autor") or ""))["id"]
+        except profiles.ProfileError:
+            tid = None
+    job = _start_job(slug, "Vorlage einlesen", titel,
+                     lambda job_id: vorlage.import_job(slug, text, job_id, pid if tid else None, tid, fremd))
+    return {"slug": slug, "job": job, "teile": len(profiles.split_text(text)), "zeichen": len(text)}
+
+
+@route("POST", W + "/vorlage/analyse")
+def post_vorlage_analyse(req, body, slug):
+    with worlds.open_world(slug) as conn:
+        if not vorlage.get(conn):
+            raise HTTPError(404, "Diese Welt hat keine Vorlage.")
+    try:
+        vorlage.read_text(slug)
+    except vorlage.VorlageError as exc:
+        raise HTTPError(404, str(exc))
+    return {"job": _start_job(slug, "Vorlage analysieren", slug, lambda job_id: vorlage.analyse_job(slug, job_id))}
+
+
 @route("GET", "/api/status")
 def get_status(req, body):
     return status.project_status()
@@ -159,7 +221,7 @@ def get_status(req, body):
 @route("GET", "/api/config")
 def get_config(req, body):
     return {
-        "entities": {k: {"label": v["label"], "singular": v["singular"], "title": v["title"],
+        "entities": {k: {"label": v["label"], "singular": v["singular"], "title": v["title"], "list": v.get("list"),
                          "fields": [{"name": f[0], "label": f[1], "type": f[2], "required": f[3], "secret": f[4]}
                                     for f in v["fields"]]}
                      for k, v in service.ENTITIES.items()},
@@ -627,6 +689,15 @@ def get_stories(req, body, slug):
                     "SELECT id, name, description, age_rating, taboos, abweichung FROM genres WHERE visibility = 'offen' ORDER BY id")]}
 
 
+@route("GET", W + r"/stories/(?P<thread_id>\d+)")
+def get_story(req, body, slug, thread_id):
+    with worlds.open_world(slug) as conn:
+        try:
+            return episodes.story_detail(conn, int(thread_id), req.reveal)
+        except LookupError as exc:
+            raise HTTPError(404, str(exc))
+
+
 @route("GET", W + "/episodes")
 def get_episodes(req, body, slug):
     with worlds.open_world(slug) as conn:
@@ -827,6 +898,17 @@ def get_stimmen(req, body):
                                                  for p in profiles.list_profiles()["profiles"]])
 
 
+@route("POST", "/api/stimmen/export")
+def post_voices_export(req, body):
+    ids = body.get("ids")
+    return _voice_call(stimmen.export_file, [str(i) for i in ids] if isinstance(ids, list) and ids else None)
+
+
+@route("POST", "/api/stimmen/import")
+def post_voices_import(req, body):
+    return _voice_call(stimmen.import_file, body.get("daten"), austausch._local_profile_ids())
+
+
 @route("POST", "/api/stimmen")
 def post_stimme(req, body):
     return _voice_call(stimmen.create, body)
@@ -953,42 +1035,12 @@ def post_text_import(req, body, slug):
     hint = str(body.get("hinweis") or "").strip()[:1000]
 
     def work(job_id):
-        done, waiting, empty, failed = 0, 0, 0, []
-        for i, part in enumerate(parts, 1):
-            title = f"{meta['titel']} – Teil {i}/{len(parts)}" if len(parts) > 1 else meta["titel"]
-            with worlds.open_world(slug) as conn:
-                impulse_id = service.create_impulse(conn, title, part + (f"\n\nHINWEIS DES NUTZERS: {hint}" if hint else ""),
-                                                    "text")
-                conn.execute("UPDATE impulses SET besitzer = ?, quelle_text = ?, fremd = ? WHERE id = ?",
-                             (pid, tid, 1 if meta.get("fremd") else 0, impulse_id))
-                service.set_impulse_status(conn, impulse_id, "in_arbeit")
-                conn.commit()
-                impulse = dict(conn.execute("SELECT * FROM impulses WHERE id = ?", (impulse_id,)).fetchone())
-                try:
-                    proposal = llm.propose(conn, llm.impulse_task(impulse), impulse_id=impulse_id, aufgabe="weltenbau",
-                                           art="Text einlesen", ziel=title, job_id=job_id, allow_empty=True)
-                    if proposal is None:
-                        service.set_impulse_status(conn, impulse_id, "eingearbeitet", "Kein neues Weltwissen in diesem Abschnitt.")
-                        empty += 1
-                        conn.commit()
-                        continue
-                    state = conn.execute("SELECT status FROM proposals WHERE id = ?", (proposal,)).fetchone()[0]
-                    if state == "offen":
-                        service.set_impulse_status(conn, impulse_id, "vorschlag")
-                        waiting += 1
-                    else:
-                        service.set_impulse_status(conn, impulse_id, "eingearbeitet")
-                    done += 1
-                except Exception as exc:  # ein Abschnitt darf die anderen nicht aufhalten
-                    service.set_impulse_status(conn, impulse_id, "fehler", str(exc)[:600])
-                    failed.append(f"Teil {i}: {str(exc)[:120]}")
-                conn.commit()
+        r = vorlage.teile_einlesen(slug, parts, meta["titel"], hint, job_id, pid, tid, bool(meta.get("fremd")))
         profiles.note_import(pid, tid, slug, len(parts))
-        message = (f"{done + empty} von {len(parts)} Abschnitten verarbeitet" + (f", {waiting} Vorschläge warten auf dich" if waiting else "")
-                   + (f", {empty} ohne neues Weltwissen" if empty else ""))
-        if failed and not done and not empty:
-            raise RuntimeError(message + ". " + " · ".join(failed[:3]))
-        return message + (f". Fehler: {' · '.join(failed[:3])}" if failed else ".")
+        message = vorlage.bericht(r)
+        if r["failed"] and not r["done"] and not r["empty"]:
+            raise RuntimeError(message + ". " + " · ".join(r["failed"][:3]))
+        return message + (f". Fehler: {' · '.join(r['failed'][:3])}" if r["failed"] else ".")
 
     return {"job": _start_job(slug, "Text einlesen", meta["titel"], work), "teile": len(parts)}
 

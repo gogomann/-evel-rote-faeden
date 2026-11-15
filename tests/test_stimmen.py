@@ -1,5 +1,6 @@
 """Stimmen: virtueller Autor als gemeinsamer Stil-Maßstab für Planer, Autor, Lektor, Prüfer und Messung."""
 
+import json
 import os
 import sys
 import tempfile
@@ -57,6 +58,46 @@ class StimmenTests(unittest.TestCase):
         self.assertIsNone(stimmen.get(ralf["id"]))
         stimmen.archive(ralf["id"], back=True)
         self.assertIsNotNone(stimmen.get(ralf["id"]))
+
+    def test_schreibstil_export_import(self):
+        from story_world import profiles, stimmen
+        p = profiles.create("Ralf")
+        profiles.add_text(p["id"], "Eigenes", ("Ilka sah zum Fenster hinaus. Draußen fiel Staub. " * 120).strip())
+        lem = stimmen.create({"art": "autor", "vorbild": "Stanisław Lem"})
+        stimmen.edit(lem["id"], {"steckbrief": {"satzbau": "lang"}, "hinweise": "trocken"})
+        ralf = stimmen.create({"art": "mensch", "profil_id": p["id"]})
+        stimmen._update(lem["id"], lambda x: x.update(probe={"text": "Probe", "freigegeben": True, "audio": {"datei": "x"}}))
+        datei = stimmen.export_file([lem["id"], ralf["id"]])
+        self.assertEqual((datei["format"], len(datei["stimmen"])), ("evel-stimmen", 2))
+        exp_ralf = next(v for v in datei["stimmen"] if v["id"] == ralf["id"])
+        self.assertIn("Ilka sah", exp_ralf["basis"]["anker"])  # nur Auszüge, keine Texte-Liste nötig
+        self.assertNotIn("audio", next(v for v in datei["stimmen"] if v["id"] == lem["id"])["probe"])
+        with self.assertRaises(stimmen.VoiceError):
+            stimmen.export_file(["v_00000000"])
+        with self.assertRaises(stimmen.VoiceError):
+            stimmen.import_file({"stimmen": []}, set())
+        # gleicher Rechner, unverändert → nichts passiert
+        r = stimmen.import_file(json.loads(json.dumps(datei)), {p["id"]})
+        self.assertEqual((r["neu"], r["umbenannt"], len(r["vorhanden"])), ([], [], 2))
+        # geändert → nicht überschrieben, sondern „Name 2“, dann „Name 3“
+        stimmen.edit(lem["id"], {"hinweise": "anders"})
+        r = stimmen.import_file(json.loads(json.dumps(datei)), {p["id"]})
+        self.assertEqual(r["umbenannt"][0], {"alt": lem["name"], "neu": f"{lem['name']} 2"})
+        self.assertEqual(stimmen.get(lem["id"])["hinweise"], "anders")
+        self.assertNotEqual(r["ids"][0], lem["id"])
+        r = stimmen.import_file(json.loads(json.dumps(datei)), {p["id"]})
+        self.assertEqual(r["umbenannt"][0]["neu"], f"{lem['name']} 3")
+        # andere Stimme mit gleichem Namen (andere Kennung) → ebenfalls Ziffer
+        fremd = dict(datei["stimmen"][0], id="v_abcdef12", hinweise="fremd")
+        r = stimmen.import_file({"format": "evel-stimmen", "stimmen": [fremd]}, {p["id"]})
+        self.assertEqual(r["umbenannt"][0]["neu"], f"{fremd['name']} 4")
+        self.assertIsNotNone(stimmen.get("v_abcdef12"))
+        # fremder Rechner: neue Stimmen, Basis verborgen
+        os.environ["STORY_VOICES"] = os.path.join(self.tmp.name, "stimmen2.json")
+        r = stimmen.import_file(json.loads(json.dumps(datei)), set())
+        self.assertEqual((len(r["neu"]), r["verborgen"]), (2, 1))
+        self.assertTrue(stimmen.get(ralf["id"])["basis"]["verborgen"])
+        self.assertNotIn("anker", stimmen.public(stimmen.get(ralf["id"]))["basis"])
 
     def test_eigenstaendige_geschichte(self):
         from story_world import episodes, runs, worlds

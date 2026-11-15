@@ -5,6 +5,12 @@ Server-Arten:
   z. B. Phonon, Pocket TTS, OmniVoice-Server, Kokoro-FastAPI. Ein optionales Feld „language“ wird mitgeschickt,
   wenn die Stimme oder der Server eine Sprache hat.
 - "piper": Piper-HTTP-Server (GET /voices, POST / mit {"text", "voice"}).
+- "elevenlabs": ElevenLabs (GET /v1/voices, POST /v1/text-to-speech/{voice}?output_format=pcm_24000 → PCM in WAV).
+- "google": Google Cloud Text-to-Speech (GET /v1/voices, POST /v1/text:synthesize, LINEAR16).
+- "azure": Microsoft Azure Speech (GET /cognitiveservices/voices/list, POST /cognitiveservices/v1 mit SSML).
+
+Vorauswahlen (PRESETS) wie bei den KI-Anbietern: Art, Adresse, Modell und Stückgröße sind vorbereitet, meist fehlt nur der
+Schlüssel. Cloud-Anbieter bekommen den Text der Folge; die eigenen Server im Heimnetz bleiben die Alternative.
 
 Konfiguration liegt wie die KI-Anbieter in story_world.config.json (Schlüssel "tts_server", entfernte unter "tts_archiv",
 nichts wird gelöscht). Besetzung je Welt (Sprecher → Server|Stimme) und Einstellungen je Folge (Hörspiel = mehrere
@@ -18,6 +24,7 @@ Nur Python-Standardbibliothek.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -26,11 +33,13 @@ import struct
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import wave
 from array import array
 from pathlib import Path
+from xml.sax.saxutils import escape as xml_escape
 
 from . import episodes, providers, runs, service, worlds
 
@@ -40,7 +49,54 @@ TYPES = {
                        "Adresse ohne /v1 genügt, z. B. http://192.168.1.50:8012"},
     "piper": {"name": "Piper (HTTP)",
               "info": "Piper-HTTP-Server (python3 -m piper.http_server). Adresse z. B. http://192.168.1.50:5000"},
+    "elevenlabs": {"name": "ElevenLabs", "info": "ElevenLabs-API (api.elevenlabs.io), Schlüssel im Kopf xi-api-key."},
+    "google": {"name": "Google Cloud TTS", "info": "Google Cloud Text-to-Speech (texttospeech.googleapis.com) mit API-Schlüssel."},
+    "azure": {"name": "Microsoft Azure Speech",
+              "info": "Azure Speech, Adresse mit Region, z. B. https://westeurope.tts.speech.microsoft.com"},
 }
+
+# Meistgenutzte Anbieter als Vorauswahl – wie bei den KI-Anbietern. "custom" bleibt der Weg für eigene Server.
+PRESETS = [
+    {"id": "elevenlabs", "name": "ElevenLabs", "typ": "elevenlabs", "base_url": "https://api.elevenlabs.io",
+     "modell": "eleven_multilingual_v2", "max_zeichen": 2000, "needs_key": True, "cloud": True,
+     "key_url": "https://elevenlabs.io/app/settings/api-keys",
+     "info": "Sehr natürliche Stimmen, viele Sprachen, eigene und geklonte Stimmen aus deinem Konto. "
+             "Kostenloses Kontingent, danach Abo nach Zeichen. Schlüssel braucht Lesezugriff auf Stimmen und Modelle."},
+    {"id": "openai", "name": "OpenAI TTS", "typ": "openai", "base_url": "https://api.openai.com",
+     "modell": "gpt-4o-mini-tts", "max_zeichen": 2000, "needs_key": True, "cloud": True,
+     "key_url": "https://platform.openai.com/api-keys",
+     "info": "Feste Stimmen (alloy, nova, onyx …), sprechen auch Deutsch. Abrechnung über das OpenAI-Plattformkonto."},
+    {"id": "google", "name": "Google Cloud TTS", "typ": "google", "base_url": "https://texttospeech.googleapis.com",
+     "modell": "", "sprache": "de", "max_zeichen": 1500, "needs_key": True, "cloud": True,
+     "key_url": "https://console.cloud.google.com/apis/credentials",
+     "info": "Hunderte Stimmen (Chirp 3 HD, Neural2, WaveNet). Im Google-Cloud-Projekt „Cloud Text-to-Speech API“ "
+             "aktivieren und einen API-Schlüssel anlegen. Großes Gratis-Kontingent je Monat."},
+    {"id": "azure", "name": "Microsoft Azure Speech", "typ": "azure",
+     "base_url": "https://westeurope.tts.speech.microsoft.com", "modell": "", "sprache": "de", "max_zeichen": 2000,
+     "needs_key": True, "cloud": True,
+     "key_url": "https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices",
+     "info": "Viele Neural-Stimmen, auch deutsche. Speech-Ressource anlegen, Schlüssel 1 kopieren; die Region "
+             "(z. B. westeurope, germanywestcentral) steht in der Adresse. Gratis-Stufe F0 verfügbar."},
+    {"id": "kokoro", "name": "Kokoro-FastAPI (lokal)", "typ": "openai", "base_url": "http://localhost:8880",
+     "modell": "kokoro", "max_zeichen": 400, "needs_key": False, "cloud": False,
+     "key_url": "https://github.com/remsky/Kokoro-FastAPI",
+     "info": "Läuft auf deinem Rechner oder im Heimnetz, kostenlos, kein Schlüssel. Docker-Start siehe Link."},
+    {"id": "piper", "name": "Piper (lokal)", "typ": "piper", "base_url": "http://localhost:5000",
+     "modell": "", "max_zeichen": 400, "needs_key": False, "cloud": False,
+     "key_url": "https://github.com/OHF-Voice/piper1-gpl",
+     "info": "Schnell und kostenlos, auch auf schwacher Hardware. Start: python3 -m piper.http_server -m de_DE-thorsten-medium"},
+    {"id": "custom", "name": "Eigener Server (OpenAI-kompatibel)", "typ": "openai", "base_url": "",
+     "modell": "", "max_zeichen": 400, "needs_key": False, "cloud": False, "key_url": "",
+     "info": "Phonon, Pocket TTS, OmniVoice, LocalAI oder jeder andere Server mit POST /v1/audio/speech. "
+             "Adresse ohne /v1 genügt, z. B. http://192.168.1.50:8012"},
+]
+PRESET_BY_ID = {p["id"]: p for p in PRESETS}
+
+# OpenAI hat keine Stimmenliste über die API – die festen Stimmen stehen hier (sprechen alle Sprachen).
+OPENAI_VOICES = [("alloy", None), ("ash", "male"), ("ballad", "male"), ("coral", "female"), ("echo", "male"),
+                 ("fable", "male"), ("nova", "female"), ("onyx", "male"), ("sage", "female"), ("shimmer", "female"),
+                 ("verse", "male"), ("marin", "female"), ("cedar", "male")]
+ELEVEN_PCM_RATE = 24000
 MODI = {"hoerspiel": "Hörspiel – jede Figur eigene Stimme", "hoerbuch": "Hörbuch – eine Stimme liest alles"}
 DEFAULT_MAX_CHARS = 400
 DEFAULT_TIMEOUT = 300
@@ -79,6 +135,8 @@ def public_server(s: dict) -> dict:
     out["api_key_maskiert"] = providers.mask(s.get("api_key", ""))
     out["api_key_gesetzt"] = bool(s.get("api_key"))
     out["typ_name"] = TYPES.get(s.get("typ"), {}).get("name", s.get("typ"))
+    out["preset_name"] = PRESET_BY_ID.get(s.get("preset") or "custom", {}).get("name", "")
+    out["cloud"] = bool(PRESET_BY_ID.get(s.get("preset") or "custom", {}).get("cloud"))
     out["stimmen_anzahl"] = len(s.get("stimmen") or [])
     return out
 
@@ -87,13 +145,14 @@ def public_settings() -> dict:
     cfg = _cfg()
     return {"server": [public_server(s) for s in cfg["tts_server"]],
             "archiv": [public_server(s) for s in cfg["tts_archiv"]],
-            "typen": [{"id": k, **v} for k, v in TYPES.items()], "modi": MODI,
+            "typen": [{"id": k, **v} for k, v in TYPES.items()], "presets": PRESETS, "modi": MODI,
             "standard_max_zeichen": DEFAULT_MAX_CHARS}
 
 
 def _clean_url(url: str) -> str:
     url = (url or "").strip().rstrip("/")
-    for suffix in ("/audio/speech", "/audio/voices", "/voices", "/models"):
+    for suffix in ("/audio/speech", "/audio/voices", "/voices", "/models", "/text-to-speech", "/text:synthesize",
+                   "/cognitiveservices/voices/list", "/cognitiveservices/v1"):
         if url.endswith(suffix):
             url = url[: -len(suffix)]
     if not url.startswith(("http://", "https://")):
@@ -139,11 +198,20 @@ def _apply_fields(s: dict, data: dict) -> None:
 
 
 def add_server(data: dict) -> str:
-    s = {"id": "t_" + uuid.uuid4().hex[:8], "name": "", "typ": data.get("typ") or "openai", "base_url": "",
-         "api_key": "", "modell": "", "sprache": "", "max_zeichen": DEFAULT_MAX_CHARS, "timeout": DEFAULT_TIMEOUT,
+    preset = PRESET_BY_ID.get(data.get("preset") or "custom")
+    if preset is None:
+        raise ValueError("Unbekannte Vorauswahl.")
+    s = {"id": "t_" + uuid.uuid4().hex[:8], "preset": preset["id"], "name": "", "typ": data.get("typ") or preset["typ"],
+         "base_url": "", "api_key": "", "modell": preset.get("modell", ""), "sprache": preset.get("sprache", ""),
+         "max_zeichen": preset.get("max_zeichen") or DEFAULT_MAX_CHARS, "timeout": DEFAULT_TIMEOUT,
          "stimmen": [], "modelle": [], "status": "ungeprueft"}
-    if "base_url" not in data:
-        raise ValueError("Bitte die Adresse des Servers eintragen.")
+    data = dict(data)
+    if not str(data.get("base_url") or "").strip():
+        if not preset["base_url"]:
+            raise ValueError("Bitte die Adresse des Servers eintragen.")
+        data["base_url"] = preset["base_url"]
+    if data.get("preset") and not str(data.get("name") or "").strip():
+        data["name"] = preset["name"]
     _apply_fields(s, data)
     s["name"] = s["name"] or s["base_url"].split("//", 1)[-1]
     with providers._LOCK:
@@ -203,20 +271,38 @@ def _set_state(sid: str, **fields) -> None:
 
 def _api_base(s: dict) -> str:
     base = s["base_url"]
-    if s.get("typ") == "openai" and not base.endswith("/v1"):
+    if s.get("typ") in ("openai", "elevenlabs", "google") and not base.endswith("/v1"):
         base += "/v1"
     return base
 
 
-def _http(s: dict, method: str, path: str, body: dict | None = None, timeout: int | None = None) -> tuple:
+def _auth(s: dict) -> dict:
+    key = s.get("api_key")
+    if not key:
+        return {}
+    typ = s.get("typ")
+    if typ == "elevenlabs":
+        return {"xi-api-key": key}
+    if typ == "google":
+        return {"X-Goog-Api-Key": key}
+    if typ == "azure":
+        return {"Ocp-Apim-Subscription-Key": key}
+    return {"Authorization": f"Bearer {key}"}
+
+
+def _http(s: dict, method: str, path: str, body=None, timeout: int | None = None, headers: dict | None = None) -> tuple:
+    """body: dict (wird JSON) oder fertige Bytes (Content-Type dann über headers)."""
     url = _api_base(s) + path
+    extra = headers or {}
     headers = {"User-Agent": "StoryWorld/1", "Accept": "*/*"}
     data = None
-    if body is not None:
+    if isinstance(body, (bytes, bytearray)):
+        data = bytes(body)
+    elif body is not None:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    if s.get("api_key"):
-        headers["Authorization"] = f"Bearer {s['api_key']}"
+    headers.update(_auth(s))
+    headers.update(extra)
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     context = providers._ssl_context() if url.startswith("https://") else None
     try:
@@ -288,8 +374,71 @@ def parse_voices(payload) -> list:
     return list(out.values())
 
 
+def _gender(value) -> str | None:
+    value = str(value or "").lower()
+    return {"female": "female", "f": "female", "male": "male", "m": "male"}.get(value) or (value or None)
+
+
+def _lang_filter(s: dict, voices: list) -> list:
+    """Bei Anbietern mit Hunderten Stimmen nur die eingestellte Sprache behalten (Feld „Sprache“, z. B. de)."""
+    want = (s.get("sprache") or "").lower().split("-")[0]
+    if not want:
+        return voices
+    return [v for v in voices if not v.get("sprache") or v["sprache"].lower().split("-")[0] == want]
+
+
+def _voices_elevenlabs(s: dict) -> list:
+    payload = _json(s, "/voices")
+    out = []
+    for item in (payload.get("voices") if isinstance(payload, dict) else None) or []:
+        labels = item.get("labels") or {}
+        # ElevenLabs-Stimmen sprechen mehrsprachig; Sprache nur setzen, wenn ausdrücklich angegeben
+        lang = labels.get("language") or None
+        name = item.get("name") or item.get("voice_id")
+        extra = ", ".join(x for x in (labels.get("accent"), item.get("category") if item.get("category") not in
+                                      (None, "premade") else None) if x)
+        out.append(_voice(item.get("voice_id"), f"{name} – {extra}" if extra else name, lang, _gender(labels.get("gender"))))
+    return [v for v in out if v["id"] and v["id"] != "None"]
+
+
+def _voices_google(s: dict) -> list:
+    want = (s.get("sprache") or "").strip()
+    payload = _json(s, "/voices" + (f"?languageCode={urllib.parse.quote(want)}" if want else ""), timeout=30)
+    out = []
+    for item in (payload.get("voices") if isinstance(payload, dict) else None) or []:
+        codes = item.get("languageCodes") or []
+        out.append(_voice(item.get("name"), item.get("name"), codes[0] if codes else None, _gender(item.get("ssmlGender"))))
+    return _lang_filter(s, out)
+
+
+def _voices_azure(s: dict) -> list:
+    payload = _json(s, "/cognitiveservices/voices/list", timeout=30)
+    out = []
+    for item in payload if isinstance(payload, list) else []:
+        locale = item.get("Locale")
+        name = item.get("LocalName") or item.get("DisplayName") or item.get("ShortName")
+        out.append(_voice(item.get("ShortName"), f"{name} ({locale})" if locale else name, locale, _gender(item.get("Gender"))))
+    return _lang_filter(s, out)
+
+
 def fetch_voices(s: dict) -> list:
-    paths = ["/audio/voices", "/voices"] if s.get("typ") == "openai" else ["/voices"]
+    typ = s.get("typ")
+    if typ == "elevenlabs":
+        found = _voices_elevenlabs(s)
+    elif typ == "google":
+        found = _voices_google(s)
+    elif typ == "azure":
+        found = _voices_azure(s)
+    elif s.get("preset") == "openai":
+        _json(s, "/models")  # prüft den Schlüssel; Stimmen sind fest
+        found = [_voice(vid, vid, None, gender) for vid, gender in OPENAI_VOICES]
+    else:
+        found = None
+    if found is not None:
+        if not found:
+            raise TTSError(f"{s.get('name')}: keine Stimmen gefunden" + (f" für Sprache „{s['sprache']}“." if s.get("sprache") else "."))
+        return found
+    paths = ["/audio/voices", "/voices"] if typ == "openai" else ["/voices"]
     errors = []
     for path in paths:
         try:
@@ -302,14 +451,20 @@ def fetch_voices(s: dict) -> list:
 
 
 def fetch_models(s: dict) -> list:
-    if s.get("typ") != "openai":
+    if s.get("typ") not in ("openai", "elevenlabs"):
         return []
     try:
         payload = _json(s, "/models")
     except TTSError:
         return []
+    if s.get("typ") == "elevenlabs":
+        return [m.get("model_id") for m in payload if isinstance(m, dict) and m.get("model_id")
+                and m.get("can_do_text_to_speech", True)] if isinstance(payload, list) else []
     items = payload.get("data", []) if isinstance(payload, dict) else payload
-    return [m.get("id") for m in items if isinstance(m, dict) and m.get("id")]
+    models = [m.get("id") for m in items if isinstance(m, dict) and m.get("id")]
+    if s.get("preset") == "openai":
+        models = [m for m in models if "tts" in m]
+    return models
 
 
 _LANG_NAMES = {"german": "de", "english": "en", "french": "fr", "italian": "it", "portuguese": "pt", "spanish": "es",
@@ -332,6 +487,10 @@ def detect_language(s: dict) -> str | None:
 def verify(sid: str) -> dict:
     """Verbindung prüfen und Stimmen (und Modelle) laden."""
     s = get_server(sid)
+    if PRESET_BY_ID.get(s.get("preset") or "custom", {}).get("needs_key") and not s.get("api_key"):
+        message = "Für diesen Anbieter fehlt noch der API-Schlüssel."
+        _set_state(sid, status="fehler", last_error=message, geprueft_am=time.strftime("%Y-%m-%d %H:%M"))
+        return {"ok": False, "fehler": message}
     try:
         voices = fetch_voices(s)
         models = fetch_models(s)
@@ -358,13 +517,61 @@ def language_of(s: dict, voice: str) -> str | None:
     return _voice_info(s, voice).get("sprache") or s.get("sprache") or s.get("sprache_erkannt") or None
 
 
+def pcm_to_wav(pcm: bytes, rate: int) -> bytes:
+    """Rohes PCM (mono, 16 bit, little endian) in einen WAV-Kopf packen."""
+    pcm = pcm[: len(pcm) - len(pcm) % 2]
+    fmt = struct.pack("<HHIIHH", 1, 1, rate, rate * 2, 2, 16)
+    return (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<I", 16) + fmt
+            + b"data" + struct.pack("<I", len(pcm)) + pcm)
+
+
+def _locale_of(voice: str, language: str | None) -> str:
+    """Google/Azure: Sprache steckt im Stimmennamen (de-DE-Neural2-A, de-DE-KatjaNeural)."""
+    parts = voice.split("-")
+    if len(parts) >= 3 and 2 <= len(parts[0]) <= 3:
+        return f"{parts[0]}-{parts[1]}"
+    return language or "de-DE"
+
+
+def _not_audio(s: dict, raw: bytes, ctype: str) -> TTSError:
+    hint = raw[:200].decode("utf-8", "replace") if "json" in ctype or raw[:1] in (b"{", b"[") else ctype
+    return TTSError(f"{s.get('name')}: keine Audio-Antwort ({hint}).")
+
+
 def synth(s: dict, text: str, voice: str, language: str | None = None) -> bytes:
     """Ein Stück Text sprechen lassen; liefert WAV-Bytes."""
-    if s.get("typ") == "piper":
+    typ = s.get("typ")
+    if typ == "elevenlabs":
+        model = s.get("modell") or "eleven_multilingual_v2"
+        body = {"text": text, "model_id": model}
+        if language and s.get("sprache"):
+            body["language_code"] = language.split("-")[0]  # Modelle ohne Unterstützung ignorieren das Feld
+        raw, ctype = _http(s, "POST", f"/text-to-speech/{urllib.parse.quote(voice, safe='')}"
+                                      f"?output_format=pcm_{ELEVEN_PCM_RATE}", body)
+        if raw[:1] in (b"{", b"[") or "json" in ctype:
+            raise _not_audio(s, raw, ctype)
+        return raw if raw[:4] == b"RIFF" else pcm_to_wav(raw, ELEVEN_PCM_RATE)
+    if typ == "google":
+        body = {"input": {"text": text}, "voice": {"languageCode": _locale_of(voice, language), "name": voice},
+                "audioConfig": {"audioEncoding": "LINEAR16"}}
+        raw, ctype = _http(s, "POST", "/text:synthesize", body)
+        try:
+            audio = base64.b64decode(json.loads(raw.decode("utf-8"))["audioContent"])
+        except (ValueError, KeyError, TypeError):
+            raise _not_audio(s, raw, ctype)
+        return audio if audio[:4] == b"RIFF" else pcm_to_wav(audio, 24000)
+    if typ == "azure":
+        locale = _locale_of(voice, language)
+        ssml = (f"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{locale}'>"
+                f"<voice name='{xml_escape(voice, {chr(39): '&apos;'})}'>{xml_escape(text)}</voice></speak>")
+        raw, ctype = _http(s, "POST", "/cognitiveservices/v1", ssml.encode("utf-8"),
+                           headers={"Content-Type": "application/ssml+xml",
+                                    "X-Microsoft-OutputFormat": "riff-24khz-16bit-mono-pcm"})
+    elif typ == "piper":
         raw, ctype = _http(s, "POST", "/", {"text": text, "voice": voice})
     else:
         body = {"model": s.get("modell") or "tts-1", "input": text, "voice": voice, "response_format": "wav"}
-        if language:
+        if language and s.get("preset") != "openai":  # OpenAI lehnt unbekannte Felder ab
             body["language"] = language.split("-")[0]
         raw, ctype = _http(s, "POST", "/audio/speech", body)
     if raw[:4] != b"RIFF":

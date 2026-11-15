@@ -93,6 +93,19 @@ SQLite ersetzt PostgreSQL auf Wunsch des Nutzers. Basisschema in `story_world/sc
 ## Ergänzungen Version 16 (Form)
 - `episodes.form`: `folge` (Folge der Reihe) oder `geschichte` (eigenständig, für Hörer ohne Vorwissen; trotzdem Kanon)
 
+## Ergänzungen Version 17 (Figuren & Beziehungen)
+- `characters`: + first_name (Vorname), last_name (Nachname), gender (weiblich|männlich|divers|anderes).
+  `name` bleibt der Anzeige-/Rufname, den Prompts und Erwähnungen nutzen; leer = „Vorname Nachname“. War er genau
+  „Vorname Nachname“, zieht er bei Änderungen durch den Nutzer mit (nicht beim Lückenfüllen der KI).
+  Migration: bestehende Namen → erstes Wort Vorname, Rest Nachname.
+- `character_relations`: + reason (Grund der Verbindung), ended_world_time (Bruch seit, leer = besteht), break_reason (Grund des Bruchs)
+- Verweise auf Figuren zeigen „Vorname Nachname“.
+
+## Vorlage (world_meta `vorlage`, JSON)
+- titel, autor, modus (`start`|`fortsetzung`), genre_modus (`fest`|`frei`), genre_id, datei, zeichen, status
+  (`liest`|`fertig`|`analyse_fehlt`|`fehler`), zusammenfassung, ton, ende, offene_faeden, strang_id, importiert
+- `vorlage.prompt_block` geht in jeden KI-Aufruf der Welt; `genres.resolve` erzwingt bei `fest` das Genre der Vorlage.
+
 ## Texte als Basis (außerhalb der Welten)
 - Profil-Eintrag `texte` / `texte_archiv`: id, titel, quelle, zeichen, woerter, erstellt, stil (Stilprobe ja/nein),
   eingelesen [{welt, am, teile}]; der Text selbst liegt in `profile_texte/<profil-id>/<text-id>.txt` (0600)

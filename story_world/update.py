@@ -6,8 +6,12 @@ Ablauf:
    Ersetzt werden nur Programmdateien, die sich wirklich geändert haben. Die alte Fassung jeder ersetzten oder
    entfallenen Datei kommt nach `_old/update-<alt>-nach-<neu>-<zeit>/` – gelöscht wird nichts.
    Nutzerdaten (Welten, Einstellungen, Profile, Stimmen, Texte, Exporte, SQLite-Dateien) werden nie angefasst.
-   Geht unterwegs etwas schief, wird der alte Stand wiederhergestellt.
+   Geht unterwegs etwas schief, wird der alte Stand wiederhergestellt. Vor dem ersten Kopiervorgang liegt ein Journal
+   `_update/laufend.json`; bricht der Prozess hart ab (Stromausfall), repariert `_reparatur.py` beim nächsten Start.
+   Braucht das neue Paket ein neueres Python (`__min_python__`), wird nicht installiert.
 3. Neustart: Danach passt `migrations.migrate` beim Öffnen jeder Welt das Schema an (mit Sicherung).
+
+Notfall-Rückweg: `zurueck()` (CLI `update --zurueck`) stellt den Stand vor dem letzten Update wieder her.
 
 Ein Ordner mit `.git/` (Entwicklerstand) wird nie per Update überschrieben – dort `git pull`.
 """
@@ -18,6 +22,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import sys
 import threading
 import time
@@ -27,6 +32,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from . import __version__
+from ._reparatur import MARKER, REPORT, copy_atomic
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO = os.environ.get("STORY_UPDATE_REPO", "gogomann/evel-rote-faeden")
@@ -139,6 +145,21 @@ def read_package_version(init_file: Path) -> str:
     if not match:
         raise UpdateError("Im Paket fehlt die Versionsangabe (story_world/__init__.py).")
     return match.group(1)
+
+
+def read_min_python(init_file: Path) -> str | None:
+    match = re.search(r"""^__min_python__\s*=\s*["']([^"']+)["']""", init_file.read_text(encoding="utf-8"), re.M)
+    return match.group(1) if match else None
+
+
+def check_python(required: str | None, new_version: str, current: tuple = None) -> None:
+    if not required:
+        return
+    current = tuple(current or sys.version_info[:2])
+    if current < parse_version(required)[:2]:
+        raise UpdateError(f"Version {new_version} braucht Python {version_text(required).rsplit('.', 1)[0]} oder neuer, "
+                          f"installiert ist Python {current[0]}.{current[1]}. Bitte zuerst ein neueres Python von "
+                          "https://www.python.org/downloads/ installieren – dein Programm bleibt unverändert.", 409)
 
 
 def changelog_sections(root: Path, after: str | None, upto: str) -> list:
@@ -331,6 +352,7 @@ def _install(zip_path: Path, root: Path, notes: str, tag: str) -> dict:
             if (root / "story_world" / "__init__.py").exists() else "0"
         if parse_version(new_version) <= parse_version(old_version):
             raise UpdateError(f"Version {new_version} ist nicht neuer als die installierte {old_version}.", 409)
+        check_python(read_min_python(package / "story_world" / "__init__.py"), new_version)
 
         new_files = _files(package)
         changed = [rel for rel in new_files if not _same(package / rel, root / rel)]
@@ -342,32 +364,39 @@ def _install(zip_path: Path, root: Path, notes: str, tag: str) -> dict:
         removed = [rel for rel in manifest if rel not in keep and not protected(rel) and (root / rel).is_file()]
 
         backup = root / "_old" / f"update-{old_version}-nach-{new_version}-{stamp}"
+        backup_rel = backup.relative_to(root).as_posix()
+        journal = {"von": old_version, "nach": new_version, "pid": os.getpid(), "start": time.time(),
+                   "sicherung": backup_rel, "ersetzen": [rel for rel in changed if (root / rel).exists()],
+                   "neu": [rel for rel in changed if not (root / rel).exists()], "entfallen": removed}
+        marker = work / MARKER
+        _write_json(marker, journal)  # ab hier kann _reparatur einen harten Abbruch zurückrollen
         replaced, created, moved = [], [], []
         try:
             for rel in changed:
                 dst = root / rel
                 if dst.exists():
-                    (backup / rel).parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(dst, backup / rel)
+                    copy_atomic(dst, backup / rel)  # Sicherung ist vollständig oder gar nicht da
                     replaced.append(rel)
                 else:
                     created.append(rel)
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                tmp = dst.with_name(dst.name + ".update-tmp")
-                shutil.copy2(package / rel, tmp)
-                os.replace(tmp, dst)
+                copy_atomic(package / rel, dst)
             for rel in removed:
                 (backup / rel).parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(root / rel), str(backup / rel))
                 moved.append(rel)
         except Exception as exc:
             _rollback(root, backup, replaced, created, moved)
+            backup.mkdir(parents=True, exist_ok=True)
+            os.replace(marker, backup / "abgebrochen.json")
             raise UpdateError(f"Update abgebrochen, der alte Stand ist wiederhergestellt: {exc}", 500)
+        backup.mkdir(parents=True, exist_ok=True)
+        _write_json(marker, {**journal, "fertig": time.time()})
+        os.replace(marker, backup / "update.json")  # Journal wird zum Protokoll (für `zurueck`)
 
         _write_json(work / "manifest.json", {"version": new_version, "dateien": new_files})
         report = {"von": old_version, "nach": new_version, "tag": tag or f"v{new_version}", "zeit": stamp,
                   "notizen": notes, "geaendert": len(replaced), "neu": len(created), "entfallen": len(moved),
-                  "sicherung": backup.relative_to(root).as_posix() if (replaced or moved) else None}
+                  "sicherung": backup_rel if (replaced or moved or created) else None}
         _write_json(work / "installiert.json", report)
         _save_state(root, verfuegbar=None)
         return report
@@ -381,7 +410,7 @@ def _rollback(root: Path, backup: Path, replaced: list, created: list, moved: li
             shutil.move(str(backup / rel), str(root / rel))
     for rel in replaced:
         if (backup / rel).exists():
-            shutil.copy2(backup / rel, root / rel)
+            copy_atomic(backup / rel, root / rel)
     for rel in created:  # neu angelegte Dateien nicht löschen, sondern beiseitelegen
         if (root / rel).exists():
             target = backup / "_abgebrochen" / rel
@@ -414,7 +443,11 @@ def status(root: Path = ROOT) -> dict:
     out = {"version": __version__, "entwickler": is_dev(root), "automatisch": state.get("automatisch", True),
            "neustart_automatisch": sys.platform != "win32", "migrationen": list(migrations.REPORTS),
            "verfuegbar": None, "neu": None,
-           "wartet_auf_neustart": bool(installed.get("nach")) and parse_version(installed["nach"]) > parse_version(__version__)}
+           "wartet_auf_neustart": bool(installed.get("nach")) and parse_version(installed["nach"]) > parse_version(__version__),
+           "reparatur": None}
+    repaired = _read_json(root / "_update" / REPORT)
+    if repaired and not repaired.get("gesehen"):
+        out["reparatur"] = repaired
     available = state.get("verfuegbar") or {}
     if available.get("neueste") and parse_version(available["neueste"]) > parse_version(__version__):
         out["verfuegbar"] = available
@@ -428,6 +461,9 @@ def status(root: Path = ROOT) -> dict:
 def acknowledge(root: Path = ROOT) -> dict:
     from . import migrations
     _save_state(root, gesehen_version=__version__)
+    repaired = _read_json(root / "_update" / REPORT)
+    if repaired and not repaired.get("gesehen"):
+        _write_json(root / "_update" / REPORT, {**repaired, "gesehen": True})
     del migrations.REPORTS[:]
     return {"ok": True}
 
@@ -441,3 +477,94 @@ def restart(port: int, delay: float = 0.8) -> None:
     sys.stderr.flush()
     os.chdir(ROOT)
     os.execv(sys.executable, [sys.executable, "-m", "story_world", "ui", "--port", str(port), "--kein-browser"])
+
+
+# ---------------------------------------------------------------- Notfall-Rückweg
+
+_BACKUP_RE = re.compile(r"^update-(?P<von>[\d.]+)-nach-(?P<nach>[\d.]+)-(?P<zeit>\d{8}-\d{6})$")
+
+
+def _latest_backup(root: Path, installed: str):
+    found = []
+    for path in (root / "_old").glob("update-*-nach-*"):
+        match = _BACKUP_RE.match(path.name)
+        if path.is_dir() and match and parse_version(match["nach"]) == parse_version(installed):
+            found.append((match["zeit"], path, match["von"]))
+    return max(found, key=lambda x: x[0])[1:] if found else (None, None)
+
+
+def _worlds_dir(root: Path) -> Path:
+    return Path(os.environ.get("STORY_WORLDS_DIR", root / "welten"))
+
+
+def _schema_conflicts(root: Path, known: int | None) -> list:
+    """Welten, deren Schema neuer ist, als die wiederhergestellte Fassung kennt – samt passender Sicherung."""
+    if known is None:
+        return []
+    folder = _worlds_dir(root)
+    out = []
+    for db in sorted(folder.glob("*.sqlite3")) if folder.is_dir() else []:
+        try:
+            con = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                version = con.execute("PRAGMA user_version").fetchone()[0]
+            finally:
+                con.close()
+        except sqlite3.Error:
+            continue
+        if version > known:
+            backups = sorted((folder / "backups").glob(f"{db.stem}-vor-v*.sqlite3"),
+                             key=lambda p: p.stat().st_mtime, reverse=True) if (folder / "backups").is_dir() else []
+            fitting = [p for p in backups
+                       if (m := re.match(rf"^{re.escape(db.stem)}-vor-v(\d+)-", p.name)) and known < int(m.group(1)) <= version]
+            out.append({"welt": db.name, "schema": version, "kennt": known,
+                        "sicherung": fitting[0].name if fitting else None})
+    return out
+
+
+def zurueck(root: Path = ROOT) -> dict:
+    """Stand vor dem letzten Update wiederherstellen (Notfall). Der heutige Stand wandert nach `_old/zurueck-…`."""
+    if is_dev(root):
+        raise UpdateError("Dieser Ordner ist ein Git-Entwicklerstand – dort bitte mit Git zurückgehen.", 409)
+    if not _LOCK.acquire(blocking=False):
+        raise UpdateError("Es läuft bereits ein Update.", 409)
+    try:
+        installed = read_package_version(root / "story_world" / "__init__.py")
+        source, previous = _latest_backup(root, installed)
+        if source is None:
+            raise UpdateError(f"Keine Sicherung eines Updates auf Version {installed} gefunden (_old/update-…-nach-{installed}-…).", 404)
+        record = _read_json(source / "update.json")
+        skip = {"update.json", "abgebrochen.json"}
+        restore = [rel for rel in (p.relative_to(source).as_posix() for p in source.rglob("*") if p.is_file())
+                   if rel not in skip and not rel.startswith("_abgebrochen/") and not rel.endswith(".update-tmp")]
+        created = [rel for rel in record.get("neu") or [] if rel not in restore]
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        aside = root / "_old" / f"zurueck-{installed}-nach-{previous}-{stamp}"
+        for rel in restore:  # alte Sicherung bleibt unverändert – erneutes Update bleibt möglich
+            if (root / rel).exists():
+                copy_atomic(root / rel, aside / rel)
+            copy_atomic(source / rel, root / rel)
+        moved = []
+        for rel in created:
+            if (root / rel).is_file():
+                (aside / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(root / rel), str(aside / rel))
+                moved.append(rel)
+
+        work = _state_dir(root)
+        manifest = _read_json(work / "manifest.json").get("dateien")
+        if manifest is not None:
+            _write_json(work / "manifest.json",
+                        {"version": previous, "dateien": sorted((set(manifest) - set(created)) | set(restore))})
+        report = {"von": installed, "nach": previous, "zurueck": True, "zeit": stamp,
+                  "wiederhergestellt": len(restore), "beiseitegelegt": len(moved),
+                  "quelle": source.relative_to(root).as_posix(), "sicherung": aside.relative_to(root).as_posix()}
+        _write_json(work / "installiert.json", report)
+        _save_state(root, gesehen_version=previous)
+        migrations_file = root / "story_world" / "migrations.py"
+        match = re.search(r"^LATEST_VERSION\s*=\s*(\d+)", migrations_file.read_text(encoding="utf-8"), re.M) \
+            if migrations_file.exists() else None
+        report["welten"] = _schema_conflicts(root, int(match.group(1)) if match else None)
+        return report
+    finally:
+        _LOCK.release()

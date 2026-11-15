@@ -15,7 +15,7 @@ import sqlite3
 import difflib
 import time
 
-from . import genres, kontext, llm, pdf, profiles, providers, quality, retrieval, runs, service, stimmen, timeline
+from . import genres, kontext, llm, pdf, profiles, providers, quality, retrieval, runs, service, stimmen, timeline, vorlage
 
 NARRATOR = "Erzähler"
 TYPES = ("gegenwart", "rueckblende", "vorausblick", "parallel")
@@ -75,10 +75,8 @@ def _cascade(run) -> bool:
 def _context_cascade(conn: sqlite3.Connection, ids: dict, until: float | None = None, index: bool = False,
                      overview: bool = False) -> str:
     """Gezielter Kontext (Kaskade): nur die Beteiligten samt Umfeld statt des ganzen Kanons."""
-    world = service.meta(conn)
     history = json.dumps(_episode_history(conn), ensure_ascii=False, separators=(",", ":"))
-    parts = [f"WELT: {world.get('name', '')}\n{world.get('beschreibung', '')}",
-             f"PROJEKTDOKUMENTE:\n{llm._read_context_docs()}"]
+    parts = [vorlage.world_header(conn), f"PROJEKTDOKUMENTE:\n{llm._read_context_docs(conn)}"]
     if overview:
         parts.append("ÜBERBLICK ÜBER DIE WELT (kompakt):\n" + kontext.text_overview(conn))
     parts.append("KANON DER BETEILIGTEN (JSON, inkl. backstage – Geheimnisse nicht ausplaudern):\n"
@@ -91,12 +89,11 @@ def _context_cascade(conn: sqlite3.Connection, ids: dict, until: float | None = 
 
 
 def _context(conn: sqlite3.Connection) -> str:
-    world = service.meta(conn)
     canon = json.dumps(service.canon_snapshot(conn), ensure_ascii=False, separators=(",", ":"))
     history = json.dumps(_episode_history(conn), ensure_ascii=False, separators=(",", ":"))
     snippets = [dict(r) for r in conn.execute("SELECT id, title, content, kind, thread_id FROM snippets WHERE status = 'offen'")]
-    return (f"WELT: {world.get('name', '')}\n{world.get('beschreibung', '')}\n\n"
-            f"PROJEKTDOKUMENTE:\n{llm._read_context_docs()}\n\n"
+    return (f"{vorlage.world_header(conn)}\n\n"
+            f"PROJEKTDOKUMENTE:\n{llm._read_context_docs(conn)}\n\n"
             f"KANON (JSON, inkl. backstage – Geheimnisse nicht ausplaudern):\n{canon}\n\n"
             f"LETZTE FOLGEN (älteste zuerst):\n{history}\n\n"
             f"OFFENE EINSCHÜBE (Sammelsurium, frei verwendbar):\n{json.dumps(snippets, ensure_ascii=False)}")
@@ -492,9 +489,8 @@ def _validate_theme(data) -> list:
 
 def _theme(conn, run, task: str, chain=None) -> dict:
     """Ebene 1 der Kaskade: Thema und Beteiligte aus dem kompakten Überblick."""
-    world = service.meta(conn)
     messages = [{"role": "system", "content": THEMA_PROMPT.format(style=_style(run))},
-                {"role": "user", "content": f"WELT: {world.get('name', '')}\n{world.get('beschreibung', '')}\n\n"
+                {"role": "user", "content": f"{vorlage.world_header(conn)}\n\n"
                  f"ÜBERBLICK:\n{kontext.text_overview(conn)}\n\nLETZTE FOLGEN:\n"
                  f"{json.dumps(_episode_history(conn), ensure_ascii=False)}\n\nHINWEISE FÜR DIE PLANUNG:\n"
                  f"{_planning_notes(conn)}\n\nAUFTRAG:\n{task}"}]
@@ -1515,6 +1511,88 @@ def stories(conn: sqlite3.Connection) -> list:
         cals = timeline.format_all(conn, float(r["world_time_cursor"] or 0)) if r["world_time_cursor"] is not None else []
         item["zeit"] = next((c["text"] for c in cals if c.get("text")), "")
         out.append(item)
+    return out
+
+
+def story_detail(conn: sqlite3.Connection, thread_id: int, reveal: bool = False) -> dict:
+    """Eine Geschichte zum Verstehen vor dem Weitererzählen: Worum es geht, wer drin ist, wo sie spielt, wohin sie läuft.
+    Figuren: POV + Figuren aus den Plänen der Folgen + namentlich Erwähnte. Ohne Backstage nur offene Datensätze."""
+    t = conn.execute("SELECT t.*, g.name AS genre FROM threads t LEFT JOIN genres g ON g.id = t.genre_id WHERE t.id = ?",
+                     (thread_id,)).fetchone()
+    if t is None or (not reveal and t["visibility"] != "offen"):
+        raise LookupError("Geschichte nicht gefunden.")
+    t = dict(t)
+    eps = [dict(r) for r in conn.execute(
+        "SELECT id, release_nr, title, summary, end_handoff, plan, world_start, world_end, form, status, age_rating "
+        "FROM episodes WHERE thread_id = ? ORDER BY release_nr", (thread_id,))]
+    vis = "" if reveal else " AND visibility = 'offen'"
+    chars = {r["id"]: dict(r) for r in conn.execute(
+        f"SELECT c.id, c.name, c.first_name, c.last_name, c.role, c.gender, p.name AS volk FROM characters c "
+        f"LEFT JOIN peoples p ON p.id = c.people_id WHERE 1=1{vis.replace('visibility', 'c.visibility')}")}
+    count: dict = {}
+
+    def seen(cid, n=1):
+        if cid in chars:
+            count[cid] = count.get(cid, 0) + n
+    if t.get("pov_id"):
+        seen(t["pov_id"], 100)
+    for e in eps:
+        try:
+            plan = json.loads(e.get("plan") or "{}")
+        except ValueError:
+            plan = {}
+        for f in plan.get("figuren") or []:
+            if isinstance(f, dict) and isinstance(f.get("id"), int):
+                seen(f["id"])
+    text = " ".join(str(x or "") for x in [t.get("premise")] + [e.get("summary") for e in eps]
+                    + [e.get("end_handoff") for e in eps]).lower()
+    for cid, c in chars.items():
+        full = service.compose_name(c.get("first_name"), c.get("last_name"))
+        if any(n and len(n) >= 3 and n.lower() in text for n in {c["name"], full}):
+            seen(cid)
+    figuren = [dict(chars[cid], anzeige=service.compose_name(chars[cid].get("first_name"), chars[cid].get("last_name"))
+                    or chars[cid]["name"], pov=cid == t.get("pov_id"))
+               for cid, _ in sorted(count.items(), key=lambda x: -x[1])]
+
+    places = {r["id"]: dict(r) for r in conn.execute(f"SELECT id, name, kind, parent_id FROM locations WHERE 1=1{vis}")}
+
+    def path(lid):
+        out, seen_ids = [], set()
+        while lid in places and lid not in seen_ids:
+            seen_ids.add(lid)
+            out.insert(0, places[lid]["name"])
+            lid = places[lid]["parent_id"]
+        return " › ".join(out)
+    orte = []
+    if t.get("location_id") in places:
+        orte.append({"id": t["location_id"], "name": places[t["location_id"]]["name"], "pfad": path(t["location_id"]),
+                     "haupt": True})
+    above = set()  # übergeordnete Orte des Hauptorts stehen schon im Pfad
+    cur = places.get(t.get("location_id"), {}).get("parent_id")
+    while cur in places and cur not in above:
+        above.add(cur)
+        cur = places[cur]["parent_id"]
+    for lid, pl in places.items():
+        if lid != t.get("location_id") and lid not in above and len(pl["name"]) >= 3 and pl["name"].lower() in text:
+            orte.append({"id": lid, "name": pl["name"], "pfad": path(lid), "haupt": False})
+
+    last = eps[-1] if eps else None
+    cals = timeline.format_all(conn, float(t["world_time_cursor"] or 0)) if t.get("world_time_cursor") is not None else []
+    out = {
+        "id": t["id"], "titel": t.get("title"), "praemisse": t.get("premise"), "status": t.get("status"),
+        "ebene": t.get("level"), "massstab": service.MASSSTAB_LABEL.get(t.get("massstab") or "", t.get("massstab")),
+        "genre": t.get("genre"), "genre_id": t.get("genre_id"), "abweichung": t.get("abweichung"),
+        "stimme_id": t.get("stimme_id"), "zeit": next((c["text"] for c in cals if c.get("text")), ""),
+        "figuren": figuren, "orte": orte[:8],
+        "folgen": [{"id": e["id"], "nr": e["release_nr"], "titel": e.get("title"), "zusammenfassung": e.get("summary"),
+                    "form": e.get("form"), "status": e.get("status"), "freigabe": e.get("age_rating")} for e in eps],
+        "zuletzt": {"titel": last.get("title"), "zusammenfassung": last.get("summary"),
+                    "uebergabe": last.get("end_handoff")} if last else None,
+    }
+    if reveal:  # geplante Wirkungen aus anderen Strängen verraten Kommendes – nur im Backstage
+        out["ripples"] = [dict(r) for r in conn.execute(
+            "SELECT effect AS wirkung, earliest_world_time AS ab FROM ripples WHERE target_thread_id = ? AND done = 0 "
+            "ORDER BY earliest_world_time", (thread_id,))]
     return out
 
 

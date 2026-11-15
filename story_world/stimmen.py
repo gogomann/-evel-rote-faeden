@@ -563,6 +563,84 @@ def import_voice(v: dict, local_profiles: set, quelle: str) -> str:
     return state
 
 
+FILE_FORMAT = "evel-stimmen"
+
+
+def export_file(ids=None) -> dict:
+    """Schreibstil-Export als JSON-Datei: gewählte Stimmen (ohne ids: alle aktiven) wie im Welt-Export – bei „mensch“
+    nur Stilanker und Maßstab-Auszug, nie die vollständigen Texte. Probe-Audio bleibt auf diesem Rechner."""
+    from . import __version__
+    data = _load()
+    pool = data["stimmen"] + data["archiv"]
+    chosen = [v for v in pool if v["id"] in set(ids)] if ids else list(data["stimmen"])
+    if ids and len(chosen) != len(set(ids)):
+        raise VoiceError("Mindestens eine gewählte Stimme gibt es nicht (mehr).")
+    if not chosen:
+        raise VoiceError("Keine Stimme zum Exportieren.")
+    voices = []
+    for v in chosen:
+        out = export_copy(v)
+        if isinstance(out.get("probe"), dict):
+            out["probe"].pop("audio", None)
+        out.pop("archiviert_am", None)
+        voices.append(out)
+    return {"format": FILE_FORMAT, "version": 1, "programm": __version__, "exportiert": _now(), "stimmen": voices}
+
+
+def _same(a: dict, b: dict) -> bool:
+    keys = ("art", "vorbild", "beschreibung", "steckbrief", "regler", "hinweise")
+    return all(a.get(k) == b.get(k) for k in keys) and (a.get("probe") or {}).get("text") == (b.get("probe") or {}).get("text")
+
+
+def _free_name(name: str, taken: set) -> str:
+    """„Leise“ → „Leise 2“, „Leise 3“ … – erste freie Ziffer."""
+    base = re.sub(r"\s+\d+$", "", name).strip() or name
+    n = 2
+    while f"{base} {n}".lower() in taken:
+        n += 1
+    return f"{base} {n}"
+
+
+def import_file(payload: dict, local_profiles: set) -> dict:
+    """Schreibstil-Import. Vorhandene Stimmen werden nie überschrieben: Ist dieselbe Stimme schon unverändert da,
+    passiert nichts. Sonst kommt sie neu dazu – ist ihr Name oder ihre Kennung schon vergeben, mit neuer Kennung und
+    einer Ziffer am Namen („Leise 2“). Probe-Audio gehört zum Rechner (Welt, TTS-Stimme) und wird dort neu erzeugt."""
+    if not isinstance(payload, dict) or payload.get("format") != FILE_FORMAT or not isinstance(payload.get("stimmen"), list):
+        raise VoiceError("Das ist keine Schreibstil-Exportdatei (evel-stimmen).")
+    report = {"neu": [], "umbenannt": [], "vorhanden": [], "ids": [], "verborgen": 0, "ungueltig": 0}
+    for v in payload["stimmen"]:
+        if not isinstance(v, dict) or not str(v.get("id", "")).startswith("v_") or not str(v.get("name", "")).strip():
+            report["ungueltig"] += 1
+            continue
+        pool = all_raw()["stimmen"] + all_raw()["archiv"]
+        same_id = next((x for x in pool if x["id"] == v["id"]), None)
+        if same_id is not None and _same(same_id, v) and same_id.get("name") == v.get("name"):
+            report["vorhanden"].append(same_id["name"])
+            report["ids"].append(same_id["id"])
+            continue
+        item = json.loads(json.dumps(v))
+        item["name"] = str(item["name"]).strip()[:80]
+        taken = {str(x.get("name", "")).strip().lower() for x in pool}
+        if same_id is not None:
+            item["id"] = "v_" + uuid.uuid4().hex[:8]
+        if item["name"].lower() in taken:
+            item["name"] = _free_name(item["name"], taken)
+            report["umbenannt"].append({"alt": v["name"], "neu": item["name"]})
+        else:
+            report["neu"].append(item["name"])
+        if isinstance(item.get("probe"), dict):
+            item["probe"].pop("audio", None)
+        item["bearbeitet"] = _now()
+        state = import_voice(item, local_profiles, "Schreibstil-Import")
+        if state == "ungültig":
+            report["ungueltig"] += 1
+            continue
+        report["ids"].append(item["id"])
+        if "verborgen" in state:
+            report["verborgen"] += 1
+    return report
+
+
 def all_raw() -> dict:
     return _load()
 

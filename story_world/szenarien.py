@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from . import episodes, kontext, llm, service
+from . import episodes, kontext, llm, service, vorlage
 
 ERWARTUNG_PROMPT = """Du bist ein aufmerksamer Stammhörer dieser Hörbuchreihe. Du kennst nur, was bisher erzählt wurde –
 keine Geheimnisse, keine Pläne. Sag ehrlich, was du von der nächsten Folge erwartest.
@@ -78,14 +78,13 @@ def spread(level: int, count: int) -> list:
 # ---------------------------------------------------------------- Erwartung (ohne Backstage)
 
 def public_context(conn: sqlite3.Connection, thread_id: int | None, wish: str) -> str:
-    world = service.meta(conn)
     eps = [dict(r) for r in conn.execute(
         "SELECT e.release_nr, e.title, e.summary, e.end_handoff, t.title AS strang FROM episodes e "
         "LEFT JOIN threads t ON t.id = e.thread_id WHERE e.status = 'fertig' ORDER BY e.release_nr DESC LIMIT 6")]
     threads = [{"titel": r[0], "praemisse": r[1]} for r in conn.execute(
         "SELECT title, premise FROM threads WHERE visibility = 'offen' AND (status IS NULL OR status != 'beendet')")]
     figures = [r[0] for r in conn.execute("SELECT name FROM characters WHERE visibility = 'offen' ORDER BY id LIMIT 80")]
-    parts = [f"WELT: {world.get('name', '')}\n{world.get('beschreibung', '')}",
+    parts = [vorlage.world_header(conn),
              "BISHER ERZÄHLT (neueste zuerst):\n" + json.dumps(eps, ensure_ascii=False),
              "BEKANNTE GESCHICHTEN:\n" + json.dumps(threads, ensure_ascii=False),
              "BEKANNTE FIGUREN: " + ", ".join(figures)]

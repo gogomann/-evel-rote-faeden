@@ -83,7 +83,11 @@ def rules_text(conn: sqlite3.Connection, genre_id: int | None) -> str:
 
 
 def resolve(conn: sqlite3.Connection, requested: int | None, thread_id: int | None) -> int | None:
-    """Folge > Strang > Welt-Standard."""
+    """Folge > Strang > Welt-Standard. Welt aus einer Vorlage mit „Genre fest“: immer das Genre der Vorlage."""
+    from . import vorlage
+    fixed = vorlage.fixed_genre(conn)
+    if fixed:
+        return fixed
     thread = conn.execute("SELECT genre_id FROM threads WHERE id = ?", (thread_id,)).fetchone() if thread_id else None
     for candidate in (requested, thread[0] if thread else None):
         if candidate and conn.execute("SELECT 1 FROM genres WHERE id = ?", (candidate,)).fetchone():
