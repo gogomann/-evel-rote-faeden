@@ -3,6 +3,12 @@
 Jede Version hat einen Abschnitt `## X.Y.Z – Kurztitel`. Nach einem Update zeigt Evel • Rote Fäden die Abschnitte
 seit der zuletzt genutzten Version als Hinweis an (auch nach manuellem ZIP-Entpacken).
 
+## 0.5.0 – Vertonung als MP3
+- Vertonungen (TTS-Server und macOS-Stimmen) werden als MP3 gespeichert – mit ausgefüllten ID3-Tags: Titel („Folge 3: …“), Album (Welt – Strang), Album-Interpret (Welt), Interpret (Stimmen), Tracknummer (Folgennummer), Jahr, Genre (Hörspiel/Hörbuch), Gruppierung (Genre der Folge), Sprache, Länge und Zusammenfassung als Kommentar. So sortieren Musik-Apps, Plex & Co. die Folgen richtig ein.
+- Braucht `lame` oder `ffmpeg` auf dem Rechner (Mac: `brew install lame`). Fehlt beides, bleibt es wie bisher bei WAV bzw. M4A.
+- Die WAV-Datei bleibt erhalten und liegt danach im Unterordner `_wav`; ältere MP3s wandern nach `_alt`.
+- An der Folge heißt der Knopf jetzt „MP3 herunterladen“.
+
 ## 0.4.0 – Stil-Fingerabdruck
 - Schreibstil: Eine Stimme „wie ein Autor“ kann jetzt ein Buch dieses Autors als Referenz bekommen (unter „👤 Mensch → Texte als Basis“ einfügen, als „fremd“ markieren, dann an der Stimme anhaken). Evel misst daraus den Stil-Fingerabdruck: Satzlänge, Rhythmus, sehr kurze und lange Sätze, Verschachtelung, Dialoganteil, Wortlänge, Wortvielfalt, Erzählzeit, Perspektive, Satzzeichen und die „kleinen Wörter“ (und, doch, noch …), an denen man Autoren erkennt – jeweils mit der Spanne, in der der Autor selbst schwankt. Gemessen wird per Code, ohne KI; der Buchtext geht nie an die Schreib-KI.
 - Auch eigene Texte („wie Ralf“) und freigegebene Proben liefern einen Fingerabdruck (aus einer kurzen Probe nur geschätzt – das steht dann dabei).

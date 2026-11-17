@@ -2870,6 +2870,7 @@ async function ttsCard(id) {
   const names = Object.keys(st.sprecher);
   const autoName = (n) => st.sprecher[n] && st.sprecher[n].stimme ? `automatisch (${st.sprecher[n].stimme_name || st.sprecher[n].stimme})` : "automatisch";
   const narratorRef = st.besetzung["Erzähler"] || "";
+  const ttsExt = (st.datei || "").endsWith(".mp3") ? "mp3" : "wav";
   box.innerHTML = `<div class="card stack"><div class="row spread"><h3 style="margin:0">Vertonung über TTS-Server</h3>
       <div class="row"><label class="small muted" style="margin:0">Modus</label><select id="tts-mode">${Object.entries(st.modi).map(([k, l]) =>
         `<option value="${k}" ${k === st.modus ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div></div>
@@ -2883,8 +2884,8 @@ async function ttsCard(id) {
             <td class="muted">${st.sprecher[n].quelle === "automatisch" ? "reihum vom Server der Erzähler-Stimme" : ""}</td></tr>`; }).join("")}</table>
         <div class="small muted">Die Besetzung gilt für alle Folgen dieser Welt; Figuren ohne Wahl bekommen reihum eine freie Stimme derselben Sprache.</div>`}
     ${st.fehlt.length ? `<div class="small err">Ohne Stimme: ${esc(st.fehlt.join(", "))}</div>` : ""}
-    <div class="row">${st.datei ? `<audio controls preload="none" src="${W(`/episodes/${id}/tts.wav`)}" style="height:36px"></audio>
-        <a class="small" href="${W(`/episodes/${id}/tts.wav?download=1`)}">WAV herunterladen</a>` : ""}
+    <div class="row">${st.datei ? `<audio controls preload="none" src="${W(`/episodes/${id}/tts.${ttsExt}`)}" style="height:36px"></audio>
+        <a class="small" href="${W(`/episodes/${id}/tts.${ttsExt}?download=1`)}">${ttsExt.toUpperCase()} herunterladen</a>` : ""}
       <button class="ki" id="tts-render" ${st.fehlt.length ? "disabled" : ""}>${st.datei ? "Neu vertonen" : "🎙 Mit TTS-Server vertonen"}</button>
       ${st.erstellt ? `<span class="small muted">zuletzt ${esc(st.erstellt)} · ${esc(st.datei)}</span>` : ""}</div></div>`;
   const save = (body) => guard(async () => { await api(W(`/episodes/${id}/tts`), { method: "PUT", body }); ttsCard(id); });

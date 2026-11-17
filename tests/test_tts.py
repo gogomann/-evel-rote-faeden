@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from story_world import audio, service, tts, worlds  # noqa: E402
+from story_world import audio, mp3, service, tts, worlds  # noqa: E402
 
 RATE = 24000
 
@@ -170,7 +170,7 @@ class TTSTests(unittest.TestCase):
             self.assertEqual(p["sprecher"]["Ole"]["stimme"], "Jette")
             self.assertEqual(p["sprecher"]["Erzähler"]["sprache"], "de")
 
-            path = tts.render(conn, slug, 1)
+            path = tts.render(conn, slug, 1, as_mp3=False)
             self.assertTrue(path.exists())
             with wave.open(str(path), "rb") as w:
                 self.assertEqual((w.getframerate(), w.getnchannels(), w.getsampwidth()), (RATE, 1, 2))
@@ -182,9 +182,19 @@ class TTSTests(unittest.TestCase):
             self.assertTrue(path.with_suffix(".json").exists())
 
             calls = len(FakeTTS.requests)
-            tts.render(conn, slug, 1)                                            # Zwischenspeicher: keine neuen Aufrufe
+            tts.render(conn, slug, 1, as_mp3=False)                              # Zwischenspeicher: keine neuen Aufrufe
             self.assertEqual(len(FakeTTS.requests), calls)
             self.assertEqual(len(list((path.parent / "_alt").glob("*.wav"))), 1)  # altes Ergebnis beiseitegelegt
+
+            if mp3.available():                                                  # MP3 mit ID3-Tags, WAV nach _wav
+                out = tts.render(conn, slug, 1)
+                self.assertEqual(out.suffix, ".mp3")
+                self.assertEqual(tts.output_file(conn, slug, 1), out)
+                self.assertTrue((path.parent / "_wav" / path.name).exists())
+                tags = mp3.read_tags(out)
+                self.assertTrue(tags["TIT2"].startswith("Folge 1"))
+                self.assertEqual(tags["TCON"], "Hörspiel")
+                self.assertIn("Anton", tags["TPE1"])
 
             tts.set_episode_settings(conn, 1, {"modus": "hoerbuch", "stimme": f"{sid}|Jette"})
             p = tts.plan(conn, 1)

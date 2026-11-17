@@ -1336,7 +1336,7 @@ class Handler(BaseHTTPRequestHandler):
     def _send_file(self, path, download: bool = False, ctype: str | None = None):
         """Datei mit Range-Unterstützung (Audio zum Spulen im Browser, Export-ZIP zum Herunterladen)."""
         size = path.stat().st_size
-        ctype = ctype or ("audio/mp4" if path.suffix == ".m4a" else "audio/wav")
+        ctype = ctype or {".m4a": "audio/mp4", ".mp3": "audio/mpeg"}.get(path.suffix, "audio/wav")
         start, end, status = 0, size - 1, 200
         match = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
         if match and (match.group(1) or match.group(2)):
@@ -1415,7 +1415,7 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and listen:
                 with worlds.open_world(listen.group("slug")) as conn:
                     return self._send_file(audio.audio_file(conn, int(listen.group("eid"))))
-            tts_file = re.match("^" + W + r"/episodes/(?P<eid>\d+)/tts\.wav$", path)
+            tts_file = re.match("^" + W + r"/episodes/(?P<eid>\d+)/tts\.(?:wav|mp3)$", path)
             if method == "GET" and tts_file:
                 with worlds.open_world(tts_file.group("slug")) as conn:
                     found = tts.output_file(conn, tts_file.group("slug"), int(tts_file.group("eid")))

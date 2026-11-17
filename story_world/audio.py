@@ -1,7 +1,7 @@
 """Hörbuch-Ausgabe: Folgen mit Systemstimmen vertonen.
 
 macOS: `say` (deutsche Stimmen) erzeugt je Absatz eine WAV-Datei, die hier mit kurzen Pausen zusammengefügt und – wenn
-`afconvert` vorhanden ist – als .m4a gespeichert wird. Feste Stimme für den Erzähler, je Figur eine eigene Stimme
+`lame`/`ffmpeg` vorhanden ist – als .mp3 mit ID3-Tags (mp3.py), sonst mit `afconvert` als .m4a gespeichert wird. Feste Stimme für den Erzähler, je Figur eine eigene Stimme
 (Figur → „Stimme (Hörbuch)“ oder automatisch reihum). Das Aussprache-Lexikon wird vor dem Sprechen angewandt.
 Für andere TTS-Systeme gibt es den Export als segmentiertes JSON (export_json).
 """
@@ -18,7 +18,7 @@ import wave
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 
-from . import episodes, runs, service, worlds
+from . import episodes, mp3, runs, service, worlds
 
 PAUSE_SAME = 0.45      # Sekunden zwischen Absätzen derselben Stimme
 PAUSE_CHANGE = 0.3     # Sekunden bei Sprecherwechsel
@@ -224,16 +224,21 @@ def render(conn: sqlite3.Connection, slug: str, episode_id: int, synth=None, voi
             _concat(parts, wav)
             run.step("Teile zusammengefügt", 92)
         final = wav
-        if shutil.which("afconvert"):
+        if mp3.available():
+            speakers = [mapping[episodes.NARRATOR]] + [v for k, v in mapping.items() if k != episodes.NARRATOR]
+            final = mp3.from_wav(wav, target.with_suffix(".mp3"), mp3.episode_tags(conn, ep, speakers, "hoerspiel"))
+            run.step("MP3 mit ID3-Tags gespeichert", 96)
+        elif shutil.which("afconvert"):
             m4a = target.with_suffix(".m4a")
             result = subprocess.run(["afconvert", "-f", "m4af", "-d", "aac", str(wav), str(m4a)],
                                     capture_output=True, text=True, timeout=1800)
             if result.returncode == 0 and m4a.exists():
-                # WAV nicht löschen, sondern beiseitelegen (Quarantäne statt Löschen)
-                quarantine = output_dir(slug) / "_wav"
-                quarantine.mkdir(exist_ok=True)
-                wav.replace(quarantine / wav.name)
                 final = m4a
+        if final != wav:
+            # WAV nicht löschen, sondern beiseitelegen (Quarantäne statt Löschen)
+            quarantine = output_dir(slug) / "_wav"
+            quarantine.mkdir(exist_ok=True)
+            wav.replace(quarantine / wav.name)
         relative = str(final.relative_to(worlds.worlds_dir()))
         conn.execute("UPDATE episodes SET audio_path = ? WHERE id = ?", (relative, episode_id))
         conn.commit()

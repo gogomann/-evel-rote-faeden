@@ -17,8 +17,9 @@ nichts wird gelöscht). Besetzung je Welt (Sprecher → Server|Stimme) und Einst
 Stimmen, Hörbuch = eine Stimme für alles) stehen in world_meta.
 
 Vertonung: Text je Absatz an Satzgrenzen in Stücke ≤ max_zeichen zerlegen → Server → WAV-Stücke (Zwischenspeicher
-_tts_cache, ein Neustart macht dort weiter) → eine WAV-Datei (mono, 16 bit, Abtastrate des ersten Stücks). Ältere
-Ergebnisse werden nach _alt verschoben, nicht gelöscht. Die macOS-Vertonung in audio.py bleibt unverändert.
+_tts_cache, ein Neustart macht dort weiter) → eine WAV-Datei (mono, 16 bit, Abtastrate des ersten Stücks) → mit
+lame/ffmpeg eine MP3 mit ID3-Tags (mp3.py; die WAV wandert dann nach _wav). Ältere
+Ergebnisse werden nach _alt verschoben, nicht gelöscht.
 Nur Python-Standardbibliothek.
 """
 
@@ -41,7 +42,7 @@ from array import array
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 
-from . import episodes, providers, runs, service, worlds
+from . import episodes, mp3, providers, runs, service, worlds
 
 TYPES = {
     "openai": {"name": "OpenAI-kompatibel",
@@ -838,6 +839,8 @@ def output_file(conn: sqlite3.Connection, slug: str, episode_id: int) -> Path | 
     if row is None:
         raise LookupError("Folge nicht gefunden.")
     path = _target(slug, row[0], row[1])
+    if path.with_suffix(".mp3").exists():
+        return path.with_suffix(".mp3")
     return path if path.exists() else None
 
 
@@ -917,8 +920,9 @@ def speak_single(segments: list, ref: str, target: Path, words: list | None = No
 
 
 def render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | None = None, speak=None,
-           cfg: dict | None = None) -> Path:
-    """Folge über die TTS-Server vertonen. speak/cfg sind für Tests austauschbar."""
+           cfg: dict | None = None, as_mp3: bool | None = None) -> Path:
+    """Folge über die TTS-Server vertonen. speak/cfg sind für Tests austauschbar.
+    as_mp3: None = MP3, wenn lame/ffmpeg vorhanden; False = nur WAV."""
     from . import audio  # Aussprache-Lexikon und Pausen wie bei der macOS-Vertonung
 
     speak = speak or synth
@@ -982,14 +986,29 @@ def render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | N
                 writer.close()
         _set_aside(target)
         partial.replace(target)
+        final = target
+        if as_mp3 is None:
+            as_mp3 = mp3.available()
+        if as_mp3:
+            ep = episodes.get_episode(conn, episode_id)
+            speakers = [first_voice.get("stimme_name") or first_voice["stimme"]] + \
+                       [v.get("stimme_name") or v["stimme"] for v in p["sprecher"].values() if v["server"]]
+            final = mp3.from_wav(target, target.with_suffix(".mp3"), mp3.episode_tags(conn, ep, speakers, p["modus"]))
+            quarantine = output_dir(slug) / "_wav"
+            quarantine.mkdir(exist_ok=True)
+            _set_aside(quarantine / target.name)
+            target.replace(quarantine / target.name)  # WAV nicht löschen, sondern beiseitelegen
+            run.step("MP3 mit ID3-Tags gespeichert", 98)
+        else:
+            _set_aside(target.with_suffix(".mp3"))  # ältere MP3 würde sonst statt der neuen WAV ausgeliefert
         target.with_suffix(".json").write_text(json.dumps(
-            {k: v for k, v in p.items() if k != "segmente"} | {"datei": target.name, "erstellt": time.strftime("%Y-%m-%d %H:%M"),
+            {k: v for k, v in p.items() if k != "segmente"} | {"datei": final.name, "erstellt": time.strftime("%Y-%m-%d %H:%M"),
                                                               "abtastrate": rate, "stuecke": total},
             ensure_ascii=False, indent=1), encoding="utf-8")
-        relative = str(target.relative_to(worlds.worlds_dir()))
+        relative = str(final.relative_to(worlds.worlds_dir()))
         run.step(f"Hörbuch gespeichert: {relative}", 100, "ok")
         run.finish("fertig")
-        return target
+        return final
     except Exception as exc:
         run.step(f"Abgebrochen: {exc} – bereits gesprochene Stücke liegen im Zwischenspeicher, ein neuer Start macht dort weiter.",
                  None, "fehler")
