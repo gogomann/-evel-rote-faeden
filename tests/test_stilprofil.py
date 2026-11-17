@@ -38,7 +38,35 @@ def _verschachtelt(seed: int, absaetze: int = 300) -> str:
     return "\n\n".join(out)
 
 
+def _englisch(seed: int, absaetze: int = 300) -> str:
+    """Englisches Vorbild mit gleichem Satzbau wie _knapp."""
+    rnd = random.Random(seed)
+    out = []
+    for _ in range(absaetze):
+        n = rnd.choice(NAMEN)
+        out.append(f"{n} stood at the window. It was cold. She waited. Then the messenger came. “Do you have it?” asked {n}. "
+                   f"“Yes.” He nodded. “Good. Then go.” They went. The wind was loud. Nobody spoke.")
+    return "\n\n".join(out)
+
+
 class StilprofilTests(unittest.TestCase):
+    def test_fremdsprachiges_vorbild_nur_sprachfreie_merkmale(self):
+        fp = stilprofil.fingerabdruck(_englisch(1), "Test EN", "Book")
+        self.assertEqual(fp["sprache"], "en")
+        legacy = {k: v for k, v in fp.items() if k != "sprache"}           # älterer Fingerabdruck ohne Feld
+        self.assertEqual(stilprofil.fp_sprache(legacy), "en")
+        for ref in (fp, legacy):
+            rep = stilprofil.vergleichen(_knapp(2, 60), ref)
+            ids = {m["id"] for m in rep["merkmale"]}
+            self.assertTrue(ids <= stilprofil.SPRACHFREI)                     # keine Wortlänge, Kommas, kleinen Wörter
+            self.assertEqual(rep["auffaellige_woerter"], [])
+            self.assertIn("Englisch", rep["satz"])
+            self.assertEqual(rep["urteil"], "passt")                         # gleicher Satzbau → passt trotz Sprache
+        self.assertNotIn("Buchstaben", stilprofil.ziele(fp))
+        self.assertIn("Englisch", stilprofil.ziele(fp))
+        same = stilprofil.vergleichen(_knapp(2, 60), stilprofil.fingerabdruck(_knapp(1), "Test A"))
+        self.assertEqual(same["nicht_verglichen"], [])                       # gleiche Sprache: alles wie bisher
+
     def test_gleicher_autor_passt_anderer_nicht(self):
         fp = stilprofil.fingerabdruck(_knapp(1), "Test A", "Buch A")
         self.assertGreaterEqual(fp["abschnitte"], 4)

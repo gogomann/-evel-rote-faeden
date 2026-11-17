@@ -48,6 +48,32 @@ spricht sprechen ruft rufen läuft laufen zieht ziehen tritt treten scheint sche
 stellt stellen öffnet dreht drehen schaut schauen blickt blicken nickt nicken lacht lächelt schweigt schweigen""".split())
 _ICH = {"ich", "mich", "mir", "mein", "meine", "meinen", "meinem", "meiner", "meines"}
 
+# Spracherkennung über häufige Wörter, die es nur in einer der Sprachen gibt
+_SPRACH_WOERTER = {
+    "de": set("und der die das nicht ist ich sie er es zu den mit sich auf ein eine dem des war auch noch".split()),
+    "en": set("the and of to was he that his her you with had for on is not they but at she it".split()),
+}
+SPRACH_NAMEN = {"de": "Deutsch", "en": "Englisch"}
+# Merkmale, die zwischen Sprachen vergleichbar sind (Satzbau, Rhythmus, Dialog, Satzzeichen). Wortlänge, Wortvielfalt,
+# Kommas (deutsche Kommaregeln), Erzählzeit, Perspektive und die kleinen Wörter hängen an der Sprache selbst.
+SPRACHFREI = {"satzlaenge", "satz_streuung", "kurze_saetze", "lange_saetze", "dialoganteil", "ausruf", "frage",
+              "gedankenstrich", "doppelpunkt", "auslassung"}
+
+
+def sprache_von(rates: dict) -> str | None:
+    """rates: Wort → Häufigkeit (Anzahl oder je 1000). „de“, „en“ oder None, wenn nicht eindeutig."""
+    score = {lang: sum(rates.get(w, 0) for w in ws) for lang, ws in _SPRACH_WOERTER.items()}
+    best = max(score, key=score.get)
+    rest = sum(v for k, v in score.items() if k != best)
+    return best if score[best] > 0 and score[best] >= 3 * rest else None
+
+
+def fp_sprache(fp: dict | None) -> str | None:
+    """Sprache eines Fingerabdrucks; ältere ohne Feld werden aus dem gespeicherten Wortschatz bestimmt."""
+    if not fp:
+        return None
+    return fp.get("sprache") or sprache_von(fp.get("wortschatz") or {})
+
 CHUNK_WORDS = 1500        # Abschnittsgröße für die Schwankung innerhalb des Autors
 MIN_WORDS = 150           # darunter keine Messung
 SAFE_WORDS = 600          # darunter nur eingeschränkt aussagekräftig
@@ -172,6 +198,7 @@ def messen(text: str) -> dict | None:
         "auslassung": per_k(body.count("…") + body.count("...")),
         "_fw": {w: counts.get(w, 0) * 1000 / n for w in FUNKTIONSWOERTER},
         "_counts": counts,
+        "sprache": sprache_von(counts),
     }
 
 
@@ -240,7 +267,7 @@ def fingerabdruck(text: str, quelle: str = "", titel: str = "") -> dict | None:
     d_mean, d_std = _stats(own)
     total = whole["woerter"]
     vocab = sorted(whole["_counts"].items(), key=lambda kv: -kv[1])[:VOCAB_SIZE]
-    return {"version": 1, "quelle": quelle, "titel": titel, "woerter": total, "abschnitte": len(parts),
+    return {"version": 1, "quelle": quelle, "titel": titel, "sprache": whole["sprache"], "woerter": total, "abschnitte": len(parts),
             "erstellt": time.strftime("%Y-%m-%d %H:%M"), "werte": werte, "funktionswoerter": fw,
             "delta": {"mittel": round(d_mean, 3) if d_mean is not None else 0.75,
                       "streuung": round(max(d_std or 0.0, 0.08), 3) if d_std is not None else 0.25},
@@ -284,13 +311,18 @@ def vergleichen(text: str, fp: dict | None, namen: list | None = None) -> dict |
     if m is None:
         return {"wert": None, "urteil": "zu_kurz", "satz": "Text zu kurz für einen Stil-Abgleich.", "merkmale": [],
                 "auffaellige_woerter": [], "quelle": fp.get("quelle")}
-    rows, weighted, weights = [], 0.0, 0.0
+    rows, weighted, weights, skipped = [], 0.0, 0.0, []
+    ref_lang = fp_sprache(fp)
+    fremd = bool(m["sprache"] and ref_lang and m["sprache"] != ref_lang)  # z. B. deutsche Folge gegen englisches Buch
     # Lange Texte schwanken weniger als die 1500-Wörter-Abschnitte des Vorbilds → Spanne etwas enger (höchstens halb).
     shrink = max(0.5, math.sqrt(CHUNK_WORDS / m["woerter"])) if m["woerter"] > CHUNK_WORDS and fp.get("abschnitte", 0) >= 4 else 1.0
     for key, label, weight, *_rest in MERKMALE:
         ref = fp["werte"].get(key)
         mine = m.get(key)
         if not ref or mine is None:
+            continue
+        if fremd and key not in SPRACHFREI:
+            skipped.append(label.split(" (")[0])
             continue
         z = (mine - ref["mittel"]) / (ref["streuung"] * shrink) if ref["streuung"] else 0.0
         more, less = _rest[-2], _rest[-1]
@@ -303,6 +335,18 @@ def vergleichen(text: str, fp: dict | None, namen: list | None = None) -> dict |
                               f"{more if z > 0 else less} als das Vorbild")})
         weighted += weight * min(abs(z), 4.0)
         weights += weight
+    zd = 0.0
+    if fremd:
+        skipped.append("kleine Wörter")
+    else:
+        zd, weighted, weights = _signatur(m, fp, rows, weighted, weights)
+    score = round(100 * (1 - (weighted / weights) / 4)) if weights else None
+    odd = [] if fremd else auffaellige_woerter(m["_counts"], m["woerter"], fp, namen or [])
+    return _bericht(m, fp, rows, score, odd, zd, skipped, ref_lang)
+
+
+def _signatur(m: dict, fp: dict, rows: list, weighted: float, weights: float) -> tuple:
+    """Autorensignatur (kleine Wörter) als eigene Zeile; nur bei gleicher Sprache sinnvoll."""
     d = _delta(m["_fw"], fp.get("funktionswoerter") or {})
     dref = dict(fp.get("delta") or {"mittel": 0.75, "streuung": 0.25})
     if m["woerter"] < CHUNK_WORDS:  # kurze Texte streuen bei den kleinen Wörtern stärker – Erwartung anheben
@@ -319,8 +363,10 @@ def vergleichen(text: str, fp: dict | None, namen: list | None = None) -> dict |
                  else "andere „kleine Wörter“ als das Vorbild – " + ", ".join(top)})
     weighted += DELTA[2] * min(zd, 4.0)
     weights += DELTA[2]
-    score = round(100 * (1 - (weighted / weights) / 4)) if weights else None
-    odd = auffaellige_woerter(m["_counts"], m["woerter"], fp, namen or [])
+    return zd, weighted, weights
+
+
+def _bericht(m: dict, fp: dict, rows: list, score, odd: list, zd: float, skipped: list, ref_lang: str | None) -> dict:
     strong = [r for r in rows if r["urteil"] == "stark"]
     key_strong = [r for r in strong if r["id"] in ("praeteritum", "ich_anteil", "dialoganteil", "satzlaenge")]
     if score is None:
@@ -339,10 +385,15 @@ def vergleichen(text: str, fp: dict | None, namen: list | None = None) -> dict |
             "unklar": "Kein Urteil möglich."}[urteil]
     if urteil in ("auffaellig", "stark"):
         satz += "; ".join(r["satz"] for r in out_of[:3]) + "."
+    if skipped:
+        satz += (f" Hinweis: Das Vorbild ist {SPRACH_NAMEN.get(ref_lang, ref_lang)}, die Folge "
+                 f"{SPRACH_NAMEN.get(m['sprache'], m['sprache'])} – verglichen werden nur Satzbau, Rhythmus, Dialog und "
+                 f"Satzzeichen; nicht vergleichbar: {', '.join(skipped)}.")
     if m["woerter"] < SAFE_WORDS:
         satz += f" (Nur {m['woerter']} Wörter – Aussage unsicher.)"
     return {"wert": score, "urteil": urteil, "satz": satz, "merkmale": rows, "auffaellige_woerter": odd,
-            "signatur_z": round(zd, 2),
+            "signatur_z": round(zd, 2), "sprache": m["sprache"], "vorbild_sprache": ref_lang,
+            "nicht_verglichen": skipped,
             "woerter": m["woerter"], "quelle": fp.get("quelle"), "titel": fp.get("titel"),
             "vorbild_woerter": fp.get("woerter"), "gemessen": time.strftime("%Y-%m-%d %H:%M")}
 
@@ -430,6 +481,11 @@ def tabelle(fp: dict | None) -> list:
         if not v:
             continue
         rows.append({"id": key, "label": label, "wert": _fmt(key, v["mittel"]), "spanne": _span(key, v["mittel"], v["streuung"])})
+    lang = fp_sprache(fp)
+    if lang and lang != "de":
+        rows.append({"id": "sprache", "label": "Sprache des Vorbilds", "wert": SPRACH_NAMEN.get(lang, lang),
+                     "spanne": "Wortlänge, Wortvielfalt, Kommas und kleine Wörter gelten nur für diese Sprache"})
+        return rows
     fw = fp.get("funktionswoerter") or {}
     top = sorted(fw.items(), key=lambda kv: -kv[1]["mittel"])[:12]
     rows.append({"id": "wortwahl", "label": "Häufigste kleine Wörter (je 1000)",
@@ -448,11 +504,14 @@ def _de(x: float, digits: int) -> str:
     return f"{x:.{digits}f}".replace(".", ",")
 
 
-def ziele(fp: dict | None) -> str:
-    """Messbare Stilziele in Worten – für Planer, Autor und Lektor (nur Zahlen, nie Originaltext)."""
+def ziele(fp: dict | None, sprache: str = "de") -> str:
+    """Messbare Stilziele in Worten – für Planer, Autor und Lektor (nur Zahlen, nie Originaltext).
+    Ist das Vorbild in einer anderen Sprache als die Folge (sprache), entfallen die sprachabhängigen Ziele."""
     if not fp or not fp.get("werte"):
         return ""
-    v = {k: x["mittel"] for k, x in fp["werte"].items()}
+    lang = fp_sprache(fp)
+    fremd = bool(lang and sprache and lang != sprache)
+    v = {k: x["mittel"] for k, x in fp["werte"].items() if not fremd or k in SPRACHFREI}
     pct = lambda x: f"{round(100 * x)} %"  # noqa: E731
     lines = []
     if "satzlaenge" in v:
@@ -489,6 +548,10 @@ def ziele(fp: dict | None) -> str:
         lines.append("- Satzzeichen: " + "; ".join(marks) + ".")
     src = f"„{fp['titel']}“" if fp.get("titel") else (fp.get("quelle") or "dem Vorbild")
     count = f"{fp.get('woerter', 0):,}".replace(",", ".")
+    if fremd:
+        lines.append(f"- Das Vorbild ist {SPRACH_NAMEN.get(lang, lang)}: Wortwahl, Wortlänge und Kommasetzung nicht "
+                     "übertragen, sondern so schreiben, wie es im Deutschen natürlich klingt (Erzählzeit und Perspektive "
+                     "sind aus dem Vorbild hier nicht messbar).")
     head = (f"MESSBARE STILZIELE (Fingerabdruck aus {src}, {count} Wörter gemessen – "
             "diese Werte werden nach dem Schreiben nachgemessen):")
     return head + "\n" + "\n".join(lines)

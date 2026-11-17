@@ -3,6 +3,12 @@
 Jede Version hat einen Abschnitt `## X.Y.Z – Kurztitel`. Nach einem Update zeigt Evel • Rote Fäden die Abschnitte
 seit der zuletzt genutzten Version als Hinweis an (auch nach manuellem ZIP-Entpacken).
 
+## 0.6.2 – Stil-Abgleich mit fremdsprachigem Vorbild
+- Fehler behoben: Stammt das Vorbild aus einem Buch in einer anderen Sprache (z. B. die englische Ausgabe von „The Three-Body Problem“), wurde eine deutsche Folge trotzdem an Wortlänge, Wortvielfalt, Kommas und den deutschen „kleinen Wörtern“ gemessen. Das ergab unsinnige Abweichungen („‚die‘ häufiger“, Autorensignatur 20,99) und eine viel zu schlechte Stil-Treue.
+- Evel erkennt jetzt die Sprache von Vorbild und Folge (auch bei schon gespeicherten Fingerabdrücken). Bei unterschiedlicher Sprache werden nur Satzbau, Rhythmus, Dialoganteil und Satzzeichen verglichen; der Abgleich sagt dazu, was nicht vergleichbar ist. „Auffällig oft benutzt“ entfällt dann.
+- Auch die Stilziele für Planer, Autor und Lektor übernehmen aus einem fremdsprachigen Vorbild keine Wortlänge und Kommasetzung mehr.
+- Bereits gemessene Folgen: unter „Stil-Abgleich“ über „vergleichen mit“ neu messen.
+
 ## 0.6.1 – Vertonung nicht doppelt starten
 - Fehler behoben: Wurde „Neu vertonen“ zweimal kurz hintereinander gestartet (z. B. Doppelklick), liefen zwei Vertonungen derselben Folge gleichzeitig, schoben sich gegenseitig die Datei weg und brachen mit „No such file or directory“ ab.
 - Jetzt läuft je Folge höchstens eine Vertonung; ein zweiter Start bekommt sofort den Hinweis „wird gerade schon vertont“. Der Knopf ist nach dem Klick gesperrt.
