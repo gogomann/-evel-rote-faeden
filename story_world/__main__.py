@@ -10,6 +10,7 @@
   python3 -m story_world migrate pfad.sqlite3 Datei auf aktuelles Schema bringen (mit Backup)
   python3 -m story_world update [--nur-pruefen]  Programm von Codeberg aktualisieren (Daten bleiben unberührt)
   python3 -m story_world update --zurueck     Notfall: Stand vor dem letzten Update wiederherstellen
+  python3 -m story_world system              Systemprüfung (MP3-Encoder usw.), Fehlendes installieren
   python3 -m story_world pfad.sqlite3         wie bisher: Basisschema anlegen/ergänzen
 """
 
@@ -29,8 +30,19 @@ def main() -> None:
         parser.add_argument("--port", type=int, default=8765)
         parser.add_argument("--kein-browser", action="store_true")
         opts = parser.parse_args(args[1:])
-        from .web import serve
+        from .web import _already_running, serve
+        if not _already_running(opts.port):
+            try:  # beim ersten Start nach dem Entpacken/Update: Zusatzprogramme prüfen und anbieten
+                from . import systemcheck
+                systemcheck.run()
+            except Exception as exc:  # die Prüfung darf den Start nie verhindern
+                print(f"Systemprüfung übersprungen: {exc}")
         serve(opts.port, not opts.kein_browser)
+    elif command == "system":
+        from . import systemcheck
+        items = systemcheck.run(force=True)
+        if not all(i["ok"] for i in items):
+            sys.exit(1)
     elif command == "folge":
         parser = argparse.ArgumentParser(prog="story_world folge")
         parser.add_argument("welt")

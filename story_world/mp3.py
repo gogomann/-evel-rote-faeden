@@ -27,7 +27,10 @@ class MP3Error(RuntimeError):
 
 def encoder() -> tuple | None:
     """(Art, Pfad) des ersten verfügbaren Encoders oder None."""
-    search = os.pathsep.join([os.environ.get("PATH", ""), *_EXTRA_PATHS])
+    extra = list(_EXTRA_PATHS)
+    if os.environ.get("LOCALAPPDATA"):  # Windows: winget legt Programme hier ab, PATH kennt sie erst nach Neustart
+        extra.append(os.path.join(os.environ["LOCALAPPDATA"], "Microsoft", "WinGet", "Links"))
+    search = os.pathsep.join([os.environ.get("PATH", ""), *extra])
     for name in ("lame", "ffmpeg"):
         found = shutil.which(name, path=search)
         if found:

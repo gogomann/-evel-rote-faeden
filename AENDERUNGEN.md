@@ -3,6 +3,13 @@
 Jede Version hat einen Abschnitt `## X.Y.Z – Kurztitel`. Nach einem Update zeigt Evel • Rote Fäden die Abschnitte
 seit der zuletzt genutzten Version als Hinweis an (auch nach manuellem ZIP-Entpacken).
 
+## 0.6.0 – Systemprüfung beim Start
+- Beim ersten Start nach dem Entpacken (und nach jedem Update) prüft Evel, ob die Zusatzprogramme da sind: MP3-Encoder (lame oder ffmpeg) und auf dem Mac die Systemstimmen.
+- Fehlt der MP3-Encoder, fragt das Startfenster, ob er automatisch installiert werden soll – Enter genügt. Mac: über Homebrew (`lame`), Windows: über winget (FFmpeg). Geht das nicht, steht im Fenster, was zu tun ist.
+- Gefragt wird nur einmal je Version; danach erscheint nur ein kurzer Hinweis. Erneut prüfen und installieren: `python3 -m story_world system`.
+- Mac-Startdatei prüft jetzt auch, ob Python 3.9 oder neuer vorhanden ist (wie schon unter Windows).
+- Die Prüfung hält den Start nie auf: Ohne Encoder läuft alles wie gehabt, Vertonungen kommen dann als WAV/M4A.
+
 ## 0.5.0 – Vertonung als MP3
 - Vertonungen (TTS-Server und macOS-Stimmen) werden als MP3 gespeichert – mit ausgefüllten ID3-Tags: Titel („Folge 3: …“), Album (Welt – Strang), Album-Interpret (Welt), Interpret (Stimmen), Tracknummer (Folgennummer), Jahr, Genre (Hörspiel/Hörbuch), Gruppierung (Genre der Folge), Sprache, Länge und Zusammenfassung als Kommentar. So sortieren Musik-Apps, Plex & Co. die Folgen richtig ein.
 - Braucht `lame` oder `ffmpeg` auf dem Rechner (Mac: `brew install lame`). Fehlt beides, bleibt es wie bisher bei WAV bzw. M4A.

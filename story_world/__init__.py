@@ -1,6 +1,6 @@
 """Datenfundament für die fortlaufende Story-Welt."""
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __min_python__ = "3.9"  # Update installiert nur, wenn das laufende Python mindestens diese Version hat
 
 try:  # unterbrochenes Update reparieren, bevor irgendein anderes Modul geladen wird

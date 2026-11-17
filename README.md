@@ -41,7 +41,7 @@ Install [Python install manager](https://www.python.org/downloads/release/pymana
 
 1. **ZIP herunterladen:** [codeberg.org/gogomann/evel-rote-faeden](https://codeberg.org/gogomann/evel-rote-faeden)
 2. **Entpacken** – immer in denselben Ordner.
-3. **Starten.**
+3. **Starten.** Beim ersten Start prüft das Programm, ob Zusatzprogramme fehlen (z. B. für den MP3-Export), und bietet an, sie zu installieren.
 
 Updates kommen per Knopfdruck direkt in der App.
 
