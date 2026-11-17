@@ -632,6 +632,10 @@ def _responses_body(model: str, messages: list, json_mode: bool) -> dict:
         body["instructions"] = instructions
     if json_mode:
         body["text"] = {"format": {"type": "json_object"}}
+        # Die Responses-API verlangt das Wort „json“ in den input-Nachrichten – instructions zählen dabei nicht.
+        if not any("json" in str(i.get("content") or "").lower() for i in body["input"]):
+            last = body["input"][-1]
+            last["content"] = (str(last.get("content") or "") + "\n\nAntworte ausschließlich mit gültigem JSON.").lstrip()
     return body
 
 

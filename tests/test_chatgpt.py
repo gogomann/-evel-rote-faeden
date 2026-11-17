@@ -227,7 +227,9 @@ class ChatGPTTests(unittest.TestCase):
         body = call[3]
         self.assertEqual(call[2]["Authorization"], "Bearer at-1")
         self.assertEqual((body["store"], body["stream"], body["instructions"]), (False, True, "Nur JSON."))
-        self.assertEqual(body["input"], [{"role": "user", "content": "Antworte."}])
+        # JSON-Modus: OpenAI verlangt „json“ in input (instructions zählen nicht) → Hinweis wird angehängt
+        self.assertEqual(body["input"], [{"role": "user", "content": "Antworte.\n\nAntworte ausschließlich mit gültigem JSON."}])
+        self.assertEqual(body["text"], {"format": {"type": "json_object"}})
         for field in ("temperature", "max_output_tokens", "max_tokens", "messages"):
             self.assertNotIn(field, body)
 
@@ -345,3 +347,19 @@ class ChatGPTTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResponsesJsonTests(unittest.TestCase):
+    """OpenAI verlangt bei text.format json_object das Wort „json“ in input – instructions zählen nicht."""
+
+    def test_json_hinweis_nur_wenn_noetig(self):
+        from story_world import providers
+        body = providers._responses_body("m", [{"role": "system", "content": "Antworte NUR mit JSON."},
+                                               {"role": "user", "content": "Bewerte A und B."}], True)
+        self.assertEqual(body["text"], {"format": {"type": "json_object"}})
+        self.assertIn("json", body["input"][-1]["content"].lower())
+        self.assertTrue(body["input"][-1]["content"].startswith("Bewerte A und B."))
+        same = providers._responses_body("m", [{"role": "user", "content": "Gib JSON zurück."}], True)
+        self.assertEqual(same["input"][-1]["content"], "Gib JSON zurück.")
+        plain = providers._responses_body("m", [{"role": "user", "content": "Erzähl."}], False)
+        self.assertEqual(plain["input"][-1]["content"], "Erzähl.")

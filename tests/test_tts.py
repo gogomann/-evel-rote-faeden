@@ -111,6 +111,33 @@ class TTSTests(unittest.TestCase):
             service.create_row(conn, "pronunciations", {"term": "Aureas", "spoken": "Ah-u-re-as"})
         return slug
 
+    def test_lexicon_variants_case_language_ipa(self):
+        from story_world import audio
+        slug = worlds.create_world("Lexikon")
+        with worlds.open_world(slug) as conn:
+            service.create_row(conn, "pronunciations", {"term": "Warp Blase", "spoken": "Woarp Blaase",
+                                                        "variants": "Warp-Blase, Warpblasen", "ignore_case": "on",
+                                                        "language": "en", "ipa": ""})
+            service.create_row(conn, "pronunciations", {"term": "Aureas", "spoken": "Ah-u-re-as", "ipa": "aʊˈʁeːas"})
+            words = audio.lexicon(conn)
+        text = "Die warp blase hält. Zwei Warpblasen, eine Warp-Blase & mehr. Aureas! Aureasse bleibt."
+        self.assertEqual(audio.apply_lexicon(text, words),
+                         "Die Woarp Blaase hält. Zwei Woarp Blaase, eine Woarp Blaase & mehr. Ah-u-re-as! Aureasse bleibt.")
+        tokens = audio.apply_lexicon(text, words, ssml=True)
+        chunks = tts.chunk_text(tokens, 60)
+        self.assertTrue(all(c.count("\uE000") == c.count("\uE001") for c in chunks))   # Platzhalter nie zerteilt
+        ssml = " ".join(audio.to_ssml(c) for c in chunks)
+        self.assertIn("<lang xml:lang='en-US'>warp blase</lang>", ssml)               # Originalschreibweise bleibt
+        self.assertIn("<lang xml:lang='en-US'>Warpblasen</lang>", ssml)
+        self.assertIn("<phoneme alphabet='ipa' ph='aʊˈʁeːas'>Aureas</phoneme>", ssml)
+        self.assertIn("&amp; mehr", ssml)
+        plain = audio.to_ssml(tokens, allow_lang=False)                                  # Stimme ohne Sprachwechsel
+        self.assertIn("Woarp Blaase", plain)
+        self.assertNotIn("<lang", plain)
+        self.assertIn("<phoneme", plain)
+        self.assertEqual(audio.locale("en-gb"), "en-GB")
+        self.assertIsNone(audio.locale("englisch"))
+
     def test_decode_formats_and_chunking(self):
         rate, s16 = tts.decode_wav(wav_int16_streaming(0.5))
         self.assertEqual((rate, len(s16)), (RATE, RATE // 2))

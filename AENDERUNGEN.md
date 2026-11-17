@@ -3,6 +3,14 @@
 Jede Version hat einen Abschnitt `## X.Y.Z – Kurztitel`. Nach einem Update zeigt Evel • Rote Fäden die Abschnitte
 seit der zuletzt genutzten Version als Hinweis an (auch nach manuellem ZIP-Entpacken).
 
+## 0.4.0 – Stil-Fingerabdruck
+- Schreibstil: Eine Stimme „wie ein Autor“ kann jetzt ein Buch dieses Autors als Referenz bekommen (unter „👤 Mensch → Texte als Basis“ einfügen, als „fremd“ markieren, dann an der Stimme anhaken). Evel misst daraus den Stil-Fingerabdruck: Satzlänge, Rhythmus, sehr kurze und lange Sätze, Verschachtelung, Dialoganteil, Wortlänge, Wortvielfalt, Erzählzeit, Perspektive, Satzzeichen und die „kleinen Wörter“ (und, doch, noch …), an denen man Autoren erkennt – jeweils mit der Spanne, in der der Autor selbst schwankt. Gemessen wird per Code, ohne KI; der Buchtext geht nie an die Schreib-KI.
+- Auch eigene Texte („wie Ralf“) und freigegebene Proben liefern einen Fingerabdruck (aus einer kurzen Probe nur geschätzt – das steht dann dabei).
+- Planer, Autor und Lektor bekommen den Fingerabdruck als messbare Stilziele („im Schnitt 9 Wörter je Satz, Präteritum, dritte Person …“), der Prüfer ebenso.
+- Jede neue Folge wird danach Merkmal für Merkmal mit dem Vorbild verglichen: an der Folge unter „Stil-Abgleich“ (Folge gegen Vorbild, normale Spanne, was abweicht, auffällig oft benutzte Wörter) und im KI-Lauf. Weicht sie deutlich ab, wartet sie auf deine Freigabe – abschaltbar unter Einstellungen → Diese Welt → Stil-Abgleich.
+- Ältere Folgen lassen sich nachträglich messen, auch gegen eine andere Stimme („vergleichen mit“).
+- „Wessen Stil ist das?“ auf der Seite Schreibstil: Text einfügen, Evel zeigt, welcher Stimme er am nächsten kommt.
+
 ## 0.3.0 – Mit ChatGPT-Abo anmelden
 - Neuer KI-Anbieter „ChatGPT-Abo (Plus/Pro)“: Einstellungen → KI-Anbieter → „+ Anbieter hinzufügen“ → „Continue with ChatGPT“. Anmeldung im Browser, kein API-Schlüssel nötig; die Modelle werden danach automatisch geladen.
 - Die KI-Anfragen zählen auf das Kontingent deines ChatGPT-Abos. Wie viel diese App nutzen darf, stellst du in ChatGPT ein (Einstellungen → Nutzung). Ist das Limit erreicht, springt die 2./3. Wahl der Aufgabe ein.

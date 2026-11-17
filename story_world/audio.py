@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import wave
 from pathlib import Path
+from xml.sax.saxutils import escape as xml_escape
 
 from . import episodes, runs, service, worlds
 
@@ -51,13 +52,81 @@ def german(all_voices: list) -> list:
 
 
 def lexicon(conn: sqlite3.Connection) -> list:
-    return [dict(r) for r in conn.execute("SELECT term, spoken FROM pronunciations ORDER BY length(term) DESC")]
+    return [dict(r) for r in conn.execute(
+        "SELECT term, spoken, variants, ignore_case, language, ipa FROM pronunciations ORDER BY length(term) DESC")]
 
 
-def apply_lexicon(text: str, entries: list) -> str:
+# Platzhalter für SSML-Einträge: übersteht Zerlegen (keine Leer-/Satzzeichen) und XML-Escaping, Inhalt als Hex-JSON
+_TOKEN = re.compile("\uE000([0-9a-f]+)\uE001")
+_LOCALES = {"en": "en-US", "ja": "ja-JP", "zh": "zh-CN", "sv": "sv-SE", "da": "da-DK", "cs": "cs-CZ", "ko": "ko-KR",
+            "el": "el-GR", "uk": "uk-UA", "nb": "nb-NO", "hi": "hi-IN", "ar": "ar-SA", "he": "he-IL", "pt": "pt-PT"}
+
+
+def _forms(entry: dict) -> list:
+    variants = [v.strip() for v in re.split(r"[,;\n]", entry.get("variants") or "")]
+    return sorted({f for f in [entry["term"], *variants] if f}, key=len, reverse=True)
+
+
+def _pattern(entry: dict) -> re.Pattern:
+    alternatives = "|".join(re.escape(f) for f in _forms(entry))
+    return re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)", re.IGNORECASE if entry.get("ignore_case") else 0)
+
+
+def locale(language: str | None) -> str | None:
+    """„en“ → „en-US“, „en-gb“ → „en-GB“; Ungültiges → None."""
+    lang = (language or "").strip().replace("_", "-")
+    if re.fullmatch(r"[A-Za-z]{2,3}", lang):
+        lang = lang.lower()
+        return _LOCALES.get(lang, f"{lang}-{lang.upper()}")
+    match = re.fullmatch(r"([A-Za-z]{2,3})-([A-Za-z]{2,4})", lang)
+    return f"{match.group(1).lower()}-{match.group(2).upper()}" if match else None
+
+
+def apply_lexicon(text: str, entries: list, ssml: bool = False) -> str:
+    """Wörter durch ihre Sprechfassung ersetzen. ssml=True: Einträge mit Sprache/IPA werden zu Platzhaltern,
+    die to_ssml() nach dem Zerlegen in <lang>/<phoneme> umsetzt."""
     for entry in entries:
-        text = re.sub(rf"(?<!\w){re.escape(entry['term'])}(?!\w)", entry["spoken"], text)
+        if ssml and (entry.get("ipa") or locale(entry.get("language"))):
+            def repl(match, e=entry):
+                data = [match.group(0), e["spoken"], e.get("ipa") or "", e.get("language") or ""]
+                return "\uE000" + json.dumps(data, ensure_ascii=False).encode("utf-8").hex() + "\uE001"
+        else:
+            def repl(match, e=entry):
+                return e["spoken"]
+        text = _pattern(entry).sub(repl, text)
     return text
+
+
+def _markup(hexdata: str, allow_lang: bool) -> str:
+    try:
+        original, spoken, ipa, language = json.loads(bytes.fromhex(hexdata).decode("utf-8"))
+    except (ValueError, TypeError):
+        return ""
+    lang = locale(language) if allow_lang else None
+    if ipa:
+        inner = f"<phoneme alphabet='ipa' ph='{xml_escape(ipa, {chr(39): '&apos;', chr(34): '&quot;'})}'>" \
+                f"{xml_escape(original)}</phoneme>"
+    elif lang:
+        inner = xml_escape(original)
+    else:
+        return xml_escape(spoken)
+    return f"<lang xml:lang='{lang}'>{inner}</lang>" if lang else inner
+
+
+def to_ssml(text: str, allow_lang: bool = True) -> str:
+    """Text XML-escapen und Platzhalter aus apply_lexicon(ssml=True) in SSML umsetzen.
+    allow_lang=False: ohne <lang> (Stimme kann keinen Sprachwechsel) – IPA bleibt, sonst die Sprechfassung."""
+    out, pos = [], 0
+    for match in _TOKEN.finditer(text):
+        out.append(xml_escape(text[pos:match.start()]))
+        out.append(_markup(match.group(1), allow_lang))
+        pos = match.end()
+    out.append(xml_escape(text[pos:]))
+    return re.sub("[\uE000\uE001]", "", "".join(out))
+
+
+def has_ssml(text: str) -> bool:
+    return bool(_TOKEN.search(text or ""))
 
 
 def assign_voices(conn: sqlite3.Connection, segments: list, available_voices: list) -> dict:

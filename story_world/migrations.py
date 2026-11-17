@@ -19,6 +19,8 @@ Version 11 = Altersfreigabe je Folge.
 Version 12 = Qualität: jeder KI-Aufruf mit Prompt (komprimiert) und Antwort (ai_calls), Szenarien je Folge
              (scenario_sets), Überraschungsstufe je Genre und Strang.
 
+Version 18 = Aussprache-Lexikon: Schreibvarianten, Groß-/Kleinschreibung egal, Sprache des Worts, Lautschrift (IPA).
+
 Vor jeder Schemaänderung einer Datei mit Inhalt wird automatisch eine
 Sicherung per SQLite-Online-Backup angelegt.
 """
@@ -31,7 +33,7 @@ from pathlib import Path
 
 from .database import initialize
 
-LATEST_VERSION = 17
+LATEST_VERSION = 18
 
 # Schemaänderungen bestehender Welten seit Programmstart – für den Hinweis in der Oberfläche nach einem Update.
 REPORTS: list = []
@@ -528,6 +530,15 @@ def _migrate_to_17(connection: sqlite3.Connection) -> None:
             connection.execute(f"ALTER TABLE character_relations ADD COLUMN {name} {sql}")
 
 
+def _migrate_to_18(connection: sqlite3.Connection) -> None:
+    """Aussprache-Lexikon: Schreibvarianten, Groß-/Kleinschreibung egal, Sprache des Worts, Lautschrift (IPA)."""
+    cols = _columns(connection, "pronunciations")
+    for name, sql in (("variants", "TEXT"), ("ignore_case", "INTEGER NOT NULL DEFAULT 0"),
+                      ("language", "TEXT"), ("ipa", "TEXT")):
+        if name not in cols:
+            connection.execute(f"ALTER TABLE pronunciations ADD COLUMN {name} {sql}")
+
+
 def _migrate_to_3(connection: sqlite3.Connection) -> None:
     connection.execute(_V3_TECHNOLOGIES)
     if "perspective_of_episode_id" not in _columns(connection, "episodes"):
@@ -595,6 +606,8 @@ def migrate(connection: sqlite3.Connection, db_path: Path | None = None) -> dict
             _migrate_to_16(connection)
         if version < 17:
             _migrate_to_17(connection)
+        if version < 18:
+            _migrate_to_18(connection)
         connection.execute(f"PRAGMA user_version = {LATEST_VERSION}")
         connection.execute("COMMIT")
     except Exception:

@@ -536,8 +536,10 @@ async function episodeReader(el, id) {
         <a class="small" href="${W(`/episodes/${id}/export.pdf`)}">Als PDF</a>
         <a class="small" href="${W(`/episodes/${id}/export`)}">Als Text für das Audiobook Studio</a></div>
       <span class="small muted">${f.minuten} min · ${esc(TYP_LABEL[f.type] || f.type)}${f.genre ? ` · ${esc(f.genre)}` : ""}${f.age_rating ? ` · ${esc(f.age_rating)}` : ""} · Strang: ${esc(f.strang || "—")} · ${speakers.length} Stimmen</span></div>
-    ${f.status === "freigabe" ? `<div class="banner"><span><b>Der Prüfer hat schwere Probleme gefunden.</b> Die Folge zählt erst nach deiner Freigabe
-      für die Fortsetzung. Details im KI-Lauf (mit Backstage).</span><button class="primary" id="rd-release">Freigeben</button></div>` : ""}
+    ${f.status === "freigabe" ? `<div class="banner"><span><b>${f.metrics && f.metrics.freigabe_gruende ? "Die Folge wartet auf dich:" : "Der Prüfer hat schwere Probleme gefunden."}</b>
+      ${f.metrics && f.metrics.freigabe_gruende ? `<ul class="small">${f.metrics.freigabe_gruende.map((g) => `<li>${esc(g)}</li>`).join("")}</ul>` : ""}
+      Die Folge zählt erst nach deiner Freigabe für die Fortsetzung. Details im KI-Lauf (mit Backstage) und unten im Stil-Abgleich.</span>
+      <button class="primary" id="rd-release">Freigeben</button></div>` : ""}
     ${warnCount(f.metrics) ? `<div class="banner warn"><span><b>⚠ ${warnCount(f.metrics)} Warnung${warnCount(f.metrics) === 1 ? "" : "en"} zu
       ${esc((f.metrics.warn_arten || ["Tabu"]).join(" / "))}.</b> Nicht jedes Modell hält sich an Tabus. Die Folge ist trotzdem fertig – lies sie
       vorher selbst${f.age_rating ? `, Altersfreigabe: ${esc(f.age_rating)}` : ""}.
@@ -548,6 +550,7 @@ async function episodeReader(el, id) {
         <a class="small" href="${W(`/episodes/${id}/export.json`)}" target="_blank">Segmente als JSON (für anderes TTS)</a></div>
       ${f.metrics ? `<span class="small muted">Qualität: ${qualityText(f.metrics)}</span>` : ""}</div>
     <div id="rd-tts"></div>
+    <div id="rd-style"></div>
     ${f.metrics && f.metrics.qualitaet ? `<div class="card small expert">Messwerte dieser Folge (per Code):
       ${Object.entries(f.metrics.qualitaet).filter(([k]) => k !== "fehler").map(([k, v]) => `${esc((S.qtests && S.qtests[k]) || k)}: <b>${Array.isArray(v) ? v.map((x) => fmtVal("", x)).join("/") : fmtVal(k, v)}</b>`).join(" · ")}
       · <a href="#" id="rd-q">Qualität der Modelle →</a></div>` : ""}
@@ -572,6 +575,45 @@ async function episodeReader(el, id) {
   $("#rd-stop").onclick = stopReading;
   el.querySelectorAll(".seg").forEach((p) => (p.ondblclick = () => startReading(f.segmente, Number($("#rd-rate").value), Number(p.dataset.i))));
   guard(() => ttsCard(id));
+  styleCard($("#rd-style"), id, f.metrics && f.metrics.stilbericht);
+}
+
+const STYLE_WORD = { passt: "passt", auffaellig: "auffällig", stark: "deutlich anders", zu_kurz: "zu kurz", unklar: "unklar" };
+function styleChip(wert, urteil) {
+  const cls = urteil === "passt" ? "st-fertig" : urteil === "stark" ? "st-fehler" : "st-offen";
+  return `<span class="chip ${cls}">${wert == null ? "–" : `${wert}/100`} · ${esc(STYLE_WORD[urteil] || urteil || "")}</span>`;
+}
+
+// Stil-Abgleich einer Folge: gespeicherter Bericht (beim Schreiben gemessen) oder auf Abruf gegen eine gewählte Stimme.
+async function styleCard(box, id, stored, stimme) {
+  if (!box) return;
+  let live = null;
+  if (!stored || stimme !== undefined) {
+    try { live = await api(W(`/episodes/${id}/stil${stimme ? `?stimme=${encodeURIComponent(stimme)}` : ""}`)); } catch (e) { box.innerHTML = ""; return; }
+  }
+  const b = live ? live.bericht : stored;
+  const off = b && b.merkmale ? b.merkmale.filter((m) => m.urteil !== "passt") : [];
+  const ok = b && b.merkmale ? b.merkmale.filter((m) => m.urteil === "passt") : [];
+  const row = (m) => `<tr class="${m.urteil === "stark" ? "bad-row" : m.urteil === "auffaellig" ? "warn-row" : ""}"><td>${esc(m.label)}</td>
+    <td><b>${esc(m.folge_text)}</b></td><td>${esc(m.vorbild_text)}</td><td class="muted">${esc(m.spanne_text)}</td>
+    <td>${m.urteil === "passt" ? "✔" : m.urteil === "stark" ? "✖ " + esc(m.satz) : "⚠ " + esc(m.satz)}</td></tr>`;
+  box.innerHTML = `<div class="card stack"><div class="row spread"><h3 style="margin:0">Stil-Abgleich ${b ? styleChip(b.wert, b.urteil) : ""}</h3>
+      <div class="row small"><span class="muted">vergleichen mit</span><select id="sty-voice"><option value="">${live && live.stimme ? `Stimme der Folge (${esc(live.stimme.name)})` : b && b.stimme ? `beim Schreiben: ${esc(b.stimme.name)}` : "Stimme der Folge"}</option></select></div></div>
+    ${b ? `<p>${esc(b.satz)} <span class="small muted">Maßstab: ${esc(b.quelle || "–")}${b.titel ? ` („${esc(b.titel)}“)` : ""}${b.gemessen ? ` · gemessen ${esc(b.gemessen)}` : ""}</span></p>
+      ${b.merkmale && b.merkmale.length ? `<table class="qtable small"><tr><th>Merkmal</th><th>Folge</th><th>Vorbild</th><th>normal beim Vorbild</th><th></th></tr>
+        ${off.map(row).join("")}</table>
+        ${ok.length ? `<details><summary class="small muted">${ok.length} Merkmale im Rahmen</summary><table class="qtable small"><tr><th>Merkmal</th><th>Folge</th><th>Vorbild</th><th>normal beim Vorbild</th><th></th></tr>${ok.map(row).join("")}</table></details>` : ""}` : ""}
+      ${b.auffaellige_woerter && b.auffaellige_woerter.length ? `<div class="small"><b>Auffällig oft benutzt</b> (beim Vorbild selten – oft KI-Lieblingswörter):
+        ${b.auffaellige_woerter.map((w) => `<span class="chip">${esc(w.wort)} ${w.anzahl}×</span>`).join(" ")}</div>` : ""}
+      ${b.urteil !== "passt" ? `<p class="small muted">Eingreifen: An der Stimme Regler oder „Hinweise an die Stimme“ anpassen (z. B. „Erzählzeit Präteritum“, „kürzere Sätze“)
+        und die Folge neu erzeugen – oder sie so freigeben. Die Messung ändert nichts an der Folge.</p>` : ""}`
+      : '<p class="small muted">Kein Maßstab vorhanden – Stimme mit Fingerabdruck wählen.</p>'}
+    ${live && live.erkennung && live.erkennung.rangliste.length ? `<div class="small muted">${esc(live.erkennung.satz)}</div>` : ""}</div>`;
+  const sel = $("#sty-voice");
+  const fill = (list) => list.forEach((x) => { const o = document.createElement("option"); o.value = x.id; o.textContent = x.name; if (x.id === stimme) o.selected = true; sel.appendChild(o); });
+  if (live) fill(live.stimmen);
+  else api("/api/stimmen").then((d) => fill(d.stimmen.filter((x) => x.fingerabdruck))).catch(() => {});
+  sel.onchange = () => styleCard(box, id, stored, sel.value || null);
 }
 
 // Vorlesen mit den Stimmen des Systems: Erzähler bekommt eine feste Stimme, Figuren wechseln über die übrigen deutschen Stimmen.
@@ -1004,7 +1046,7 @@ VIEWS.stil = async (el) => {
       <div class="small muted" style="margin-top:4px">${esc(ART_TEXT[v.art] || v.art)}${v.vorbild && v.art !== "frei" ? ` · ${esc(v.vorbild)}` : ""}</div>
       <div class="small" style="margin-top:6px">${Object.keys(v.steckbrief || {}).length ? "✔ Steckbrief" : "○ noch kein Steckbrief"}
         · ${v.probe && v.probe.freigegeben ? "✔ Probe freigegeben" : v.probe ? "○ Probe nicht freigegeben" : "○ keine Probe"}
-        · ${v.messwerte ? "✔ Maßstab" : "○ kein Maßstab"}</div></div>`;
+        · ${v.fingerabdruck ? `✔ Fingerabdruck (${Number(v.fingerabdruck.woerter || 0).toLocaleString("de-DE")} Wörter)` : v.messwerte ? "✔ Maßstab" : "○ kein Maßstab"}</div></div>`;
   el.innerHTML = `<div class="row spread"><h2>Schreibstil</h2><div class="row">
       <button class="ghost" id="st-import" title="Einen exportierten Schreibstil (Datei) übernehmen">⇧ Schreibstil importieren</button>
       <button class="primary" id="st-new">+ Neue Stimme</button></div></div>
@@ -1016,7 +1058,20 @@ VIEWS.stil = async (el) => {
     ${data.archiv.length ? `<details style="margin-top:10px"><summary class="muted">Archivierte Stimmen (${data.archiv.length})</summary>
       ${data.archiv.map((v) => `<div class="row spread card" style="margin-top:8px"><span>${esc(v.name)} <span class="small muted">archiviert ${esc(v.archiviert_am || "")}</span></span>
         <button class="ghost" data-voice-back="${v.id}">Wiederherstellen</button></div>`).join("")}</details>` : ""}
+    <details class="card" id="st-detect" style="margin-top:14px"><summary><b>Wessen Stil ist das?</b>
+      <span class="small muted">Text einfügen – Evel vergleicht ihn mit dem Fingerabdruck jeder Stimme (nur per Code, keine KI).</span></summary>
+      <div class="stack" style="margin-top:10px"><textarea id="sd-text" rows="6" placeholder="Mindestens 150 Wörter, besser 1000+ – z. B. ein Kapitel aus einem Buch oder eine Folge"></textarea>
+        <div class="row" style="justify-content:flex-end"><button class="primary" id="sd-go">Vergleichen</button></div>
+        <div id="sd-out"></div></div></details>
     <div id="st-detail" style="margin-top:22px"></div>`;
+  $("#sd-go").onclick = () => guard(async () => {
+    const r = await api("/api/stimmen/erkennen", { method: "POST", body: { text: $("#sd-text").value } });
+    $("#sd-out").innerHTML = `<p><b>${esc(r.satz)}</b> <span class="small muted">${Number(r.woerter || 0).toLocaleString("de-DE")} Wörter gemessen</span></p>
+      ${r.rangliste.length ? `<table class="qtable"><tr><th>Stimme</th><th>Stil-Treue</th><th>Wo es abweicht</th><th>Maßstab</th></tr>
+        ${r.rangliste.map((x) => `<tr><td>${esc(x.name)}</td><td>${styleChip(x.wert, x.urteil)}</td>
+          <td class="small">${esc(x.abweichungen.join(", ") || "–")}</td>
+          <td class="small muted">${esc(x.quelle || "")} · ${Number(x.basis_woerter).toLocaleString("de-DE")} Wörter${x.sicher ? "" : " ⚠ unsicher"}</td></tr>`).join("")}</table>` : ""}`;
+  });
   el.querySelectorAll("[data-voice]").forEach((c) => (c.onclick = () => { S.stimme = c.dataset.voice; S.stimmeNeu = false; render(); }));
   el.querySelectorAll("[data-voice-back]").forEach((b) => (b.onclick = () => guard(async () => {
     await api(`/api/stimmen/${b.dataset.voiceBack}/archiv`, { method: "POST", body: { zurueck: true } }); S.stimme = b.dataset.voiceBack; render(); })));
@@ -1071,6 +1126,13 @@ function voiceNewForm(box, data) {
     <div class="form">
       <div class="field" data-for="autor"><label>Autor, an dem sich die Stimme orientiert</label>
         <input id="vn-vorbild" placeholder="z. B. Stanisław Lem, Ursula K. Le Guin, Douglas Adams"></div>
+      <div class="field" data-for="autor"><label>Bücher / Texte dieses Autors als Referenz (optional, sehr empfohlen)</label>
+        <div class="stack small">${people.some((p) => p.texte.length) ? people.map((p) => p.texte.map((t) => `<label class="row" style="gap:6px">
+          <input type="checkbox" data-vr="${t.id}" data-vr-p="${p.id}" style="width:auto"> ${esc(t.titel)}
+          <span class="muted">${(t.woerter || 0).toLocaleString("de-DE")} Wörter${t.autor ? ` · ${esc(t.autor)}` : ""}${t.fremd ? " · fremder Text" : ""} · bei ${esc(p.name)}</span></label>`).join("")).join("")
+          : '<span class="muted">Noch keine Texte – unter „👤 Mensch → Texte als Basis“ ein Buch einfügen (als „fremd“ markieren).</span>'}</div>
+        <div class="small muted">Daraus misst Evel den Stil-Fingerabdruck (Satzbau, Rhythmus, Dialog, Erzählzeit, kleine Wörter …).
+          Der Text selbst geht nie an die Schreib-KI – nur die Kennzahlen.</div></div>
       <div class="field hidden" data-for="mensch"><label>Mensch</label><select id="vn-mensch">
         ${people.map((p) => `<option value="${p.id}">${esc(p.name)} (${p.texte.length} Text${p.texte.length === 1 ? "" : "e"})</option>`).join("")}</select>
         <div id="vn-texte" class="stack small" style="margin-top:8px"></div>
@@ -1092,9 +1154,12 @@ function voiceNewForm(box, data) {
   sync();
   $("#vn-cancel").onclick = () => { S.stimmeNeu = false; render(); };
   $("#vn-create").onclick = () => guard(async () => {
+    const refs = [...box.querySelectorAll("[data-vr]:checked")];
+    const refOwner = refs.length ? refs[0].dataset.vrP : null;
     const body = { art: art(), vorbild: $("#vn-vorbild").value, name: $("#vn-name").value, beschreibung: $("#vn-beschreibung").value,
-      profil_id: $("#vn-mensch") ? $("#vn-mensch").value : null,
-      texte: [...box.querySelectorAll("[data-vt]:checked")].map((x) => x.dataset.vt) };
+      profil_id: art() === "autor" ? (refOwner || (S.user ? S.user.id : null)) : ($("#vn-mensch") ? $("#vn-mensch").value : null),
+      texte: [...box.querySelectorAll("[data-vt]:checked")].map((x) => x.dataset.vt),
+      referenz_texte: refs.filter((x) => x.dataset.vrP === refOwner).map((x) => x.dataset.vr) };
     $("#vn-create").disabled = true; $("#vn-create").textContent = "KI erstellt den Steckbrief …";
     try {
       const v = await api("/api/stimmen", { method: "POST", body });
@@ -1134,6 +1199,11 @@ async function voiceDetail(box, data, vid, st, worldVoice) {
       ${v.art === "mensch" ? `<div class="field"><label>Texte von ${esc(person ? person.name : v.vorbild)} als Basis</label>
         <div class="stack small">${person && person.texte.length ? person.texte.map((t) => `<label class="row" style="gap:6px"><input type="checkbox" data-vt="${t.id}" ${(v.texte || []).includes(t.id) ? "checked" : ""} style="width:auto">
           ${esc(t.titel)} <span class="muted">${(t.woerter || 0).toLocaleString("de-DE")} Wörter</span></label>`).join("") : '<span class="muted">Keine Texte – unter „👤 Mensch“ hinzufügen.</span>'}</div></div>` : ""}
+      ${v.art === "autor" ? `<div class="field"><label>Bücher / Texte von ${esc(v.vorbild || "diesem Autor")} als Referenz</label>
+        <div class="stack small">${person && person.texte.length ? person.texte.map((t) => `<label class="row" style="gap:6px"><input type="checkbox" data-vr="${t.id}" ${(v.referenz_texte || []).includes(t.id) ? "checked" : ""} style="width:auto">
+          ${esc(t.titel)} <span class="muted">${(t.woerter || 0).toLocaleString("de-DE")} Wörter${t.autor ? ` · ${esc(t.autor)}` : ""}${t.fremd ? " · fremder Text" : ""}</span></label>`).join("")
+          : `<span class="muted">Keine Texte${person ? ` bei ${esc(person.name)}` : ""} – unter „👤 Mensch → Texte als Basis“ ein Buch einfügen.</span>`}</div>
+        <div class="small muted">Nur zum Messen (Fingerabdruck) und für kurze Analyse-Auszüge beim Steckbrief – nie als Vorlage für den Autor.</div></div>` : ""}
       <div class="field"><label>${v.art === "frei" ? "Beschreibung der Stimme" : "Ergänzende Beschreibung"}</label>
         <textarea id="vd-beschreibung" rows="2">${esc(v.beschreibung || "")}</textarea></div></div></div>
 
@@ -1166,6 +1236,16 @@ async function voiceDetail(box, data, vid, st, worldVoice) {
         <div class="row" style="justify-content:flex-end">${v.probe.freigegeben ? '<button class="ghost" id="vd-unok">Freigabe zurücknehmen</button>'
           : '<button class="primary" id="vd-ok">Passt – als Maßstab freigeben</button>'}</div>` : ""}</div>
 
+    <div class="card stack"><div class="row spread"><h3 style="margin:0">Stil-Fingerabdruck – woran jede Folge gemessen wird</h3>
+        <button class="ghost" id="vd-fp" title="Fingerabdruck aus der aktuellen Basis neu messen">↻ Neu messen</button></div>
+      ${v.fingerabdruck ? `<p class="small muted">Gemessen aus ${esc(v.fingerabdruck.quelle || "")}${v.fingerabdruck.titel ? ` („${esc(v.fingerabdruck.titel)}“)` : ""}:
+          ${Number(v.fingerabdruck.woerter || 0).toLocaleString("de-DE")} Wörter in ${v.fingerabdruck.abschnitte} Abschnitten, ${esc(v.fingerabdruck.erstellt || "")}.
+          „Normal“ ist die Spanne, in der das Vorbild selbst schwankt – liegt eine Folge außerhalb, zeigt der Stil-Abgleich an der Folge das Merkmal an.
+          ${(v.fingerabdruck.woerter || 0) < 5000 ? '<br><span class="warn-text">Wenig Text als Basis – die Spannen sind geschätzt. Mit eigenen Texten oder einem Buch des Vorbilds wird der Abgleich verlässlich.</span>' : ""}</p>
+        <table class="qtable small"><tr><th>Merkmal</th><th>Vorbild</th><th>normal</th></tr>
+          ${(v.fingerabdruck_tabelle || []).map((r) => `<tr><td>${esc(r.label)}</td><td><b>${esc(r.wert)}</b></td><td class="muted">${esc(r.spanne)}</td></tr>`).join("")}</table>`
+        : `<p class="small muted">Noch kein Fingerabdruck – ${v.art === "mensch" ? "eigene Texte als Basis wählen" : v.art === "autor" ? "ein Buch des Autors als Referenz wählen oder eine Probe freigeben" : "eine Probe freigeben"}.</p>`}
+    </div>
     <div class="card stack"><h3 style="margin:0">Maßstab – woran sich alle abgleichen</h3>
       ${v.messwerte ? `<dl class="kv">${Object.entries(MESS_LABEL).map(([k, l]) => `<dt>${esc(l)}</dt><dd>${esc(v.messwerte[k] ?? "–")}</dd>`).join("")}
         <dt>Quelle</dt><dd>${esc(v.messwerte.quelle || "")}</dd></dl>`
@@ -1190,7 +1270,8 @@ async function voiceDetail(box, data, vid, st, worldVoice) {
     beschreibung: $("#vd-beschreibung").value, hinweise: $("#vd-hinweise").value,
     steckbrief: Object.fromEntries(new FormData($("#vd-brief")).entries()),
     regler: Object.fromEntries([...box.querySelectorAll("[data-sl]")].map((r) => [r.dataset.sl, Number(r.value)])),
-    ...(v.art === "mensch" ? { texte: [...box.querySelectorAll("[data-vt]:checked")].map((x) => x.dataset.vt) } : {}) });
+    ...(v.art === "mensch" ? { texte: [...box.querySelectorAll("[data-vt]:checked")].map((x) => x.dataset.vt) } : {}),
+    ...(v.art === "autor" && person ? { referenz_texte: [...box.querySelectorAll("[data-vr]:checked")].map((x) => x.dataset.vr) } : {}) });
   const save = () => api(P, { method: "PUT", body: collect() });
   $("#vd-save").onclick = () => guard(async () => { await save(); toast("Stimme gespeichert.", "ok"); render(); });
   $("#vd-analyze").onclick = () => guard(async () => {
@@ -1210,6 +1291,7 @@ async function voiceDetail(box, data, vid, st, worldVoice) {
   if ($("#vd-ok")) $("#vd-ok").onclick = () => guard(async () => { await api(`${P}/probe/freigeben`, { method: "POST", body: { ok: true } }); toast("Probe ist jetzt Maßstab.", "ok"); render(); });
   if ($("#vd-unok")) $("#vd-unok").onclick = () => guard(async () => { await api(`${P}/probe/freigeben`, { method: "POST", body: { ok: false } }); render(); });
   $("#vd-export").onclick = () => guard(() => voiceExport(v.id));
+  $("#vd-fp").onclick = () => guard(async () => { await save(); await api(`${P}/fingerabdruck`, { method: "POST", body: {} }); toast("Fingerabdruck neu gemessen.", "ok"); render(); });
   $("#vd-arch").onclick = () => confirm(`„${v.name}“ ins Archiv legen?`) && guard(async () => { await api(`${P}/archiv`, { method: "POST", body: {} }); S.stimme = null; render(); });
   if ($("#vd-world-on")) $("#vd-world-on").onclick = () => guard(async () => { await api(W("/settings"), { method: "POST", body: { stimme: vid } }); toast("Welt-Standard gesetzt.", "ok"); render(); });
   if ($("#vd-world-off")) $("#vd-world-off").onclick = () => guard(async () => { await api(W("/settings"), { method: "POST", body: { stimme: "" } }); render(); });
@@ -2309,7 +2391,17 @@ SUB.welt = async (el) => {
           <option value="kaskade" ${o.meta.einstellungen.kontext_modus === "kaskade" ? "selected" : ""}>Kaskade – Thema → Beteiligte → Szene</option></select></div>
         <p class="small muted">Kaskade: erst wählt die KI aus einem kompakten Überblick Thema und Beteiligte, danach bekommen Planer, Autor, Prüfer und
           Archivar nur deren Datensätze. Ob das besser ist, zeigt der Prüfstand (mit Ballast, einmal voll, einmal Kaskade).</p></div>
-      <div class="row"><button class="ghost" id="s-abw-save">Speichern</button></div></div>`;
+      <div class="row"><button class="ghost" id="s-abw-save">Speichern</button></div></div>
+    <div class="card stack"><h3 style="margin:0">Stil-Abgleich</h3>
+      <div class="field"><label>Wenn eine Folge deutlich vom Fingerabdruck der Stimme abweicht …</label><div class="row" style="flex-wrap:nowrap">
+        <select id="s-stil"><option value="stark">… wartet sie auf meine Freigabe</option>
+          <option value="nie" ${o.meta.einstellungen.stil_anhalten === "nie" ? "selected" : ""}>… nur anzeigen, nicht anhalten</option></select>
+        <button class="ghost" id="s-stil-save">Speichern</button></div></div>
+      <p class="small muted">Jede Folge wird per Code mit dem Stil-Fingerabdruck ihrer Stimme verglichen (Satzbau, Rhythmus, Dialog, Erzählzeit,
+        Perspektive, Satzzeichen, kleine Wörter). Das Ergebnis steht an der Folge unter „Stil-Abgleich“ und im KI-Lauf.</p></div>`;
+  $("#s-stil-save").onclick = () => guard(async () => {
+    await api(W("/settings"), { method: "POST", body: { stil_anhalten: $("#s-stil").value } }); toast("Gespeichert.", "ok");
+  });
   api(W("/rows/genres")).then((g) => {
     $("#s-genre").innerHTML += g.rows.map((x) => `<option value="${x.id}" ${String(x.id) === o.meta.einstellungen.standard_genre ? "selected" : ""}>${esc(x.name)}</option>`).join("");
   });

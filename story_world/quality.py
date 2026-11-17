@@ -50,6 +50,10 @@ TESTS = {
                             "Floskeln („irgendwie“, „eine Art“, „seltsam“ …)."},
     "stil": {"nr": "10", "label": "Stil-Abweichung", "besser": "niedrig", "grenze": 45, "toleranz": 15, "art": "Code",
              "kurz": "Abweichung in Satzlänge und Dialoganteil von deinen Stilproben bzw. den bisherigen Folgen, in %."},
+    "stil_treue": {"nr": "10b", "label": "Stil-Treue (Fingerabdruck)", "besser": "hoch", "grenze": 50, "toleranz": 12,
+                   "art": "Code", "kurz": "0–100: Wie gut trifft die Folge den Fingerabdruck des Vorbilds (Satzbau, "
+                                         "Rhythmus, Dialog, Erzählzeit, Perspektive, Satzzeichen, kleine Wörter)? "
+                                         "Ab 70 klingt sie wie das Vorbild."},
     "plan_treue": {"nr": "11", "label": "Plan-Treue", "besser": "hoch", "grenze": 6, "toleranz": 2, "art": "Richter",
                    "kurz": "Setzt der Autor um, was im Kapitelplan steht? 0–10, bewertet vom Qualitäts-Richter."},
     "archivar": {"nr": "12", "label": "Archivar-Genauigkeit", "besser": "hoch", "grenze": 6, "toleranz": 2,

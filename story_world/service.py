@@ -176,8 +176,12 @@ ENTITIES: dict[str, dict[str, Any]] = {
         "label": "Aussprache-Lexikon", "singular": "Aussprache", "title": "term",
         "title_fmt": "{term} → {spoken}",
         "fields": [
-            ("term", "Wort / Name", "text", True, False),
-            ("spoken", "So wird es gesprochen", "text", True, False),
+            ("term", "Wort / Name (so steht es im Text)", "text", True, False),
+            ("variants", "Schreibvarianten (je Zeile oder mit Komma, z. B. Warp-Blase, Warpblasen)", "textarea", False, False),
+            ("ignore_case", "Groß-/Kleinschreibung egal", "bool", False, False),
+            ("spoken", "So wird es gesprochen (gilt für alle Stimmen)", "text", True, False),
+            ("language", "Sprache des Worts (z. B. en, en-GB; leer = Deutsch)", "text", False, False),
+            ("ipa", "Lautschrift (IPA)", "text", False, False),
             ("note", "Notiz (z. B. Betonung)", "text", False, False),
         ],
         "gaps": [],
@@ -373,12 +377,15 @@ SETTINGS = {
     "szenario_wahl": "automatisch",
     # Stimme (virtueller Autor, id aus story_world.stimmen.json), die gilt, wenn Folge und Geschichte keine vorgeben
     "stimme": "",
+    # Stil-Abgleich per Fingerabdruck: "stark" = bei deutlicher Abweichung wartet die Folge auf deine Freigabe, "nie" = nur melden
+    "stil_anhalten": "stark",
 }
 BOOL_SETTINGS = {"auto_uebernehmen", "auto_folge"}
 INT_SETTINGS = {"folge_woerter": (500, 20000, "Folgenlänge"), "nachrichten_pro_tag": (0, 10, "Nachrichten pro Tag"),
                 "sprechtempo": (80, 260, "Sprechtempo"), "abweichung": (0, 3, "Überraschung"),
                 "szenarien": (1, 3, "Anzahl Szenarien"), "min_kanon": (0, 10, "Mindest-Kanonpassung")}
-CHOICE_SETTINGS = {"kontext_modus": ("voll", "kaskade"), "szenario_wahl": ("automatisch", "ich")}
+CHOICE_SETTINGS = {"kontext_modus": ("voll", "kaskade"), "szenario_wahl": ("automatisch", "ich"),
+                   "stil_anhalten": ("stark", "nie")}
 
 
 class ValidationError(ValueError):

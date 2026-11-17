@@ -15,7 +15,7 @@ import sqlite3
 import difflib
 import time
 
-from . import genres, kontext, llm, pdf, profiles, providers, quality, retrieval, runs, service, stimmen, timeline, vorlage
+from . import genres, kontext, llm, pdf, profiles, providers, quality, retrieval, runs, service, stilprofil, stimmen, timeline, vorlage
 
 NARRATOR = "Erzähler"
 TYPES = ("gegenwart", "rueckblende", "vorausblick", "parallel")
@@ -1128,23 +1128,41 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
 
         metrics = _metrics(issues, archive, conn, episode_id)
         metrics["qualitaet"] = _measure(conn, run, episode_id, text, drafts, chapters, profile, problems_before)
+        report = getattr(run, "stilbericht", None)
+        if report:
+            metrics["stilbericht"] = report
         _log_metrics(run, metrics)
+        _log_style(run, report)
         if metrics["warnungen"]:
             run.step(f"{len(metrics['warnungen'])} Warnung(en) zu Tabu/Altersfreigabe an der Folge vermerkt "
                      "(blockiert nichts)", None, "warnung")
-        needs_review = any(isinstance(p, dict) and p.get("schwere") == "hoch" for p in issues)
+        checker_stop = any(isinstance(p, dict) and p.get("schwere") == "hoch" for p in issues)
+        # Anhalten nur gegen ein echtes Vorbild (Stimme / Erzählprofil) – nicht gegen die eigenen letzten Folgen
+        style_stop = (stilprofil.anhalten(report) and service.setting(conn, "stil_anhalten") == "stark"
+                      and not str(getattr(run, "stil_massstab", "") or "").startswith("letzte Folgen"))
+        needs_review = checker_stop or style_stop
+        reasons = (["Prüfer: mindestens ein schwerer Befund"] if checker_stop else []) \
+            + ([f"Stil weicht deutlich vom Vorbild ab ({report['wert']}/100): {report['satz']}"] if style_stop else [])
+        if reasons:
+            metrics["freigabe_gruende"] = reasons
         counts = {k: sum(1 for p in issues if isinstance(p, dict) and p.get("schwere") == k)
                   for k in ("hoch", "mittel", "niedrig")}
         _ev(run, "bewertung", "entscheidung",
-            "Freigabe nötig – Folge wartet auf dich" if needs_review else "Kein Befund „hoch“ → fertig, ohne deine Freigabe",
-            regel="Mindestens ein Prüfer-Befund mit Schwere „hoch“ → Folge wartet auf deine Freigabe. "
+            ("Freigabe nötig – Folge wartet auf dich (" + " · ".join(r.split(":")[0] for r in reasons) + ")")
+            if needs_review else "Kein Befund „hoch“, Stil im Rahmen → fertig, ohne deine Freigabe",
+            regel="Mindestens ein Prüfer-Befund mit Schwere „hoch“ → Folge wartet auf deine Freigabe. Weicht der Stil "
+                  "deutlich vom Fingerabdruck ab, wartet sie ebenfalls (abschaltbar: Einstellungen → Stil-Abgleich). "
                   "Tabu- und Altersfreigabe-Hinweise blockieren nie.",
-            ergebnis=dict(counts, warnungen=len(metrics["warnungen"])), ausgang="mensch" if needs_review else "ok")
+            ergebnis=dict(counts, warnungen=len(metrics["warnungen"]),
+                          stil=(report or {}).get("urteil"), gruende=reasons), ausgang="mensch" if needs_review else "ok")
         conn.execute("UPDATE episodes SET metrics = ?, status = ? WHERE id = ?",
                      (json.dumps(metrics, ensure_ascii=False), "freigabe" if needs_review else "fertig", episode_id))
         conn.commit()
         if needs_review:
-            run.step("Prüfer fand schwere Probleme – Folge wartet auf deine Freigabe (gezielte Rückfrage)", None, "warnung")
+            run.step(("Prüfer fand schwere Probleme" if checker_stop else "Stil weicht deutlich vom Vorbild ab")
+                     + " – Folge wartet auf deine Freigabe", None, "warnung")
+        elif report and report.get("urteil") == "auffaellig":
+            run.step(f"Stil-Abgleich {report['wert']}/100: {report['satz']}"[:240], None, "warnung")
         try:
             _world_development(conn, plan, text)
             run.step("Weltentwicklung abwesender Völker angestoßen (eigener KI-Lauf)", 99, "ok")
@@ -1221,7 +1239,7 @@ def _log_edit(run, index: int, before: str, after: str, fixes: list) -> None:
                   "wendung_geschuetzt": bool(getattr(run, "wendung", "")), "korrekturen": checks})
 
 
-QUALITY_SHOWN = ("format", "spoiler", "wiederholung", "konkretheit", "stil", "lektor_schaden", "kanon_schaden")
+QUALITY_SHOWN = ("format", "spoiler", "wiederholung", "konkretheit", "stil", "stil_treue", "lektor_schaden", "kanon_schaden")
 
 
 def _log_metrics(run, metrics: dict) -> None:
@@ -1239,6 +1257,8 @@ def _log_metrics(run, metrics: dict) -> None:
         rule = f"{better}, Grenze {spec.get('grenze')}" if spec.get("grenze") is not None else better or None
         if test == "stil" and getattr(run, "stil_massstab", None):
             rule = f"{rule} · gemessen gegen: {run.stil_massstab} (Satzlänge und Dialoganteil)"
+        if test == "stil_treue" and getattr(run, "stilbericht", None):
+            rule = f"{rule} · Fingerabdruck: {run.stilbericht.get('quelle') or '–'}"
         _ev(run, "bewertung", "bewertung", f"{spec.get('label', test)}: {quality.fmt(test, value)}",
             regel=rule,
             ergebnis={"test": test, "wert": value, "grenze": spec.get("grenze"), "urteil": verdict},
@@ -1400,7 +1420,12 @@ def _measure(conn, run, episode_id, text, drafts, chapters, profile, problems_be
         dev = quality.style_deviation(text, reference)
         if dev is not None:
             out["stil"] = dev
-        for test in ("spoiler", "wiederholung", "konkretheit", "stil"):
+        report = style_report(text, run.stimme if getattr(run, "stimme", None) else None, reference,
+                              run.stil_massstab, names)
+        run.stilbericht = report
+        if report and report.get("wert") is not None:
+            out["stil_treue"] = report["wert"]
+        for test in ("spoiler", "wiederholung", "konkretheit", "stil", "stil_treue"):
             if test in out:
                 quality.note(run, test, "autor", author, out[test], {"folge": episode_id})
         editor = run.models.get("lektor")
@@ -1417,6 +1442,64 @@ def _measure(conn, run, episode_id, text, drafts, chapters, profile, problems_be
     except Exception as exc:  # noqa: BLE001
         out["fehler"] = str(exc)[:200]
     return out
+
+
+def style_report(text: str, voice: dict | None, reference: str = "", source: str | None = None,
+                 names: list | None = None) -> dict | None:
+    """Stil-Abgleich per Fingerabdruck: Stimme (eigene Texte, Referenzbuch, Probe) – sonst der übliche Maßstab-Text."""
+    fp = (voice or {}).get("fingerabdruck")
+    if not fp and reference:
+        fp = stilprofil.fingerabdruck(reference, source or "Vergleichstext")
+    report = stilprofil.vergleichen(text, fp, names or [])
+    if report is not None and voice:
+        report["stimme"] = {"id": voice.get("id"), "name": voice.get("name")}
+    return report
+
+
+def style_check(conn: sqlite3.Connection, episode_id: int, stimme_id: str | None = None) -> dict:
+    """Stil-Abgleich einer gespeicherten Folge auf Abruf – gegen ihre Stimme oder eine gewählte – plus Erkennung,
+    nach welcher Stimme sie am ehesten klingt. Ändert nichts an der Folge."""
+    row = conn.execute("SELECT text, thread_id FROM episodes WHERE id = ?", (episode_id,)).fetchone()
+    if row is None:
+        raise LookupError("Folge nicht gefunden.")
+    text, thread_id = row[0] or "", row[1]
+    if stimme_id:
+        voice, src = stimmen.get(stimme_id), "gewählt"
+        if voice is None:
+            raise LookupError("Stimme nicht gefunden.")
+    else:
+        voice, src = stimmen.resolve(conn, None, thread_id)
+    names = _canon_names(conn)
+    if voice:
+        reference, source = stimmen.reference_text(voice), f"Stimme „{voice['name']}“"
+    else:
+        profile = profiles.get(service.meta(conn).get("nutzer_id"))
+        reference = profiles.style_samples(profile, 20000) if profile else ""
+        source = "Erzählprofil (eigene Texte)"
+        if not reference:
+            prev = [r[0] for r in conn.execute("SELECT text FROM episodes WHERE id != ? AND text IS NOT NULL "
+                                               "ORDER BY release_nr DESC LIMIT 3", (episode_id,))]
+            reference, source = "\n".join(prev), "letzte Folgen (keine Stimme mit Maßstab)"
+    report = style_report(text, voice, reference, source, names)
+    return {"bericht": report, "stimme": {"id": voice["id"], "name": voice["name"], "quelle": src} if voice else None,
+            "erkennung": stilprofil.erkennen(text, stimmen.with_fingerprint()),
+            "stimmen": [{"id": vid, "name": name} for vid, name, _ in stimmen.with_fingerprint()]}
+
+
+def _log_style(run, report: dict | None) -> None:
+    """Stil-Abgleich im Nachvollzug: jedes auffällige Merkmal in Alltagssprache, Vorbild gegen Folge."""
+    if not report or report.get("wert") is None:
+        return
+    off = [m for m in report["merkmale"] if m["urteil"] != "passt"]
+    _ev(run, "bewertung", "bewertung", f"Stil-Abgleich: {report['wert']}/100 – {report['satz']}"[:300],
+        regel="Fingerabdruck des Vorbilds (typischer Wert und normale Schwankung je Merkmal) gegen die fertige Folge. "
+              "„auffällig“ ab 2, „deutlich anders“ ab 3 Schwankungen Abstand; Gesamtwert unter "
+              f"{stilprofil.SCORE_STARK} oder Erzählzeit/Perspektive/Dialog/Satzlänge deutlich anders → „deutlich“.",
+        ergebnis={"wert": report["wert"], "urteil": report["urteil"], "quelle": report.get("quelle"),
+                  "abweichungen": [f"{m['label']}: Folge {m['folge_text']}, Vorbild {m['vorbild_text']} "
+                                   f"(normal {m['spanne_text']}) – {m['satz']}" for m in off],
+                  "auffaellige_woerter": [f"{w['wort']} ({w['anzahl']}×)" for w in report.get("auffaellige_woerter", [])]},
+        ausgang="ok" if report["urteil"] == "passt" else "warnung")
 
 
 WARN_PREFIX = re.compile(r"^\W*(tabu|altersfreigabe|genre)\b", re.I)

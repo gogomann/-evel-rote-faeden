@@ -7,6 +7,9 @@ Maßstab. Derselbe Maßstab geht an Planer, Autor, Lektor (schreiben danach) und
 Qualitätsmessung vergleicht mit den eigenen Texten bzw. der freigegebenen Probe.
 
 Fremde Autoren: nur Stilbeschreibung, nie Originaltext als Vorlage. Eigene Texte: kurze Auszüge als Stilanker.
+Stil-Fingerabdruck (stilprofil.py): aus eigenen Texten, aus Referenztexten des Vorbilds (z. B. ein eingelesenes Buch –
+nur Kennzahlen, der Text selbst geht nie an die Schreib-KI) oder aus der freigegebenen Probe. Er liefert Planer, Autor und
+Lektor messbare Stilziele und vergleicht jede fertige Folge Merkmal für Merkmal mit dem Vorbild.
 
 Speicherort: story_world.stimmen.json im Projektordner (oder STORY_VOICES), Dateirechte 0600, per .gitignore
 ausgeschlossen. Nichts wird gelöscht – entfernte Stimmen wandern ins Archiv.
@@ -22,7 +25,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import llm, profiles, providers, quality
+from . import llm, profiles, providers, quality, stilprofil
 
 ROOT = Path(__file__).resolve().parent.parent
 _LOCK = threading.RLock()
@@ -120,7 +123,23 @@ def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M")
 
 
+def _ensure_fingerprints() -> None:
+    """Stimmen von vor dem Fingerabdruck einmalig nachmessen (nur Kennzahlen, keine KI)."""
+    with _LOCK:
+        data = _load()
+        todo = [v for v in data["stimmen"] if "fingerabdruck" not in v]
+        if not todo:
+            return
+        for v in todo:
+            try:
+                _fingerprint(v)
+            except Exception:  # noqa: BLE001 – Messung darf die Liste nie verhindern
+                v["fingerabdruck"] = None
+        _save(data)
+
+
 def list_voices() -> dict:
+    _ensure_fingerprints()
     data = _load()
     return {"stimmen": sorted(data["stimmen"], key=lambda v: v.get("name", "").lower()), "archiv": data["archiv"],
             "arten": ARTEN, "felder": [{"id": k, "label": v} for k, v in FIELDS],
@@ -130,7 +149,25 @@ def list_voices() -> dict:
 def get(vid: str | None) -> dict | None:
     if not vid:
         return None
-    return next((v for v in _load()["stimmen"] if v["id"] == vid), None)
+    v = next((v for v in _load()["stimmen"] if v["id"] == vid), None)
+    if v is not None and "fingerabdruck" not in v:
+        _ensure_fingerprints()
+        v = next((v for v in _load()["stimmen"] if v["id"] == vid), None)
+    return v
+
+
+def with_fingerprint() -> list:
+    """[(id, Name, Fingerabdruck)] aller aktiven Stimmen mit Fingerabdruck – für „Wessen Stil ist das?“."""
+    _ensure_fingerprints()
+    return [(v["id"], v["name"], v["fingerabdruck"]) for v in _load()["stimmen"] if v.get("fingerabdruck")]
+
+
+def _clean_refs(pid: str | None, tids) -> list:
+    """Referenztexte eines Vorbilds (Autor): beliebige Texte des Profils, auch fremde – sie werden nur gemessen."""
+    if not pid or not isinstance(tids, list):
+        return []
+    known = {t["id"] for t in (profiles.get(pid) or {}).get("texte", [])}
+    return [t for t in tids if isinstance(t, str) and t in known]
 
 
 def _clean_texts(pid: str | None, tids) -> list:
@@ -156,7 +193,9 @@ def create(data: dict) -> dict:
     if not name:
         name = f"Wie {vorbild}" if vorbild else "Neue Stimme"
     voice = {"id": "v_" + uuid.uuid4().hex[:8], "name": name, "art": art, "vorbild": vorbild, "profil_id": profil_id,
-             "texte": _clean_texts(profil_id, data.get("texte")) if art == "mensch" else [], "beschreibung": str(data.get("beschreibung") or "")[:4000],
+             "texte": _clean_texts(profil_id, data.get("texte")) if art == "mensch" else [],
+             "referenz_texte": _clean_refs(profil_id, data.get("referenz_texte")) if art == "autor" else [],
+             "beschreibung": str(data.get("beschreibung") or "")[:4000],
              "steckbrief": {}, "regler": {s[0]: 0 for s in SLIDERS}, "hinweise": "", "probe": None, "messwerte": None,
              "created": _now(), "bearbeitet": _now()}
     if art == "mensch" and not voice["texte"]:
@@ -166,7 +205,7 @@ def create(data: dict) -> dict:
         data_all = _load()
         data_all["stimmen"].append(voice)
         _save(data_all)
-    if art == "mensch":
+    if art == "mensch" or voice["referenz_texte"]:
         voice = _update(voice["id"], _measure_texts)
     return voice
 
@@ -207,6 +246,9 @@ def edit(vid: str, changes: dict) -> dict:
                     pass
         if "texte" in changes and v["art"] == "mensch":
             v["texte"] = _clean_texts(v.get("profil_id"), changes.get("texte"))
+            _measure_texts(v)
+        if "referenz_texte" in changes and v["art"] == "autor":
+            v["referenz_texte"] = _clean_refs(v.get("profil_id"), changes.get("referenz_texte"))
             _measure_texts(v)
         v["bearbeitet"] = _now()
     return _update(vid, apply)
@@ -264,12 +306,100 @@ def _local_texts(v: dict, budget: int) -> str:
     return profiles.style_samples(sub, budget)
 
 
+FULL_LIMIT = 2_500_000  # Zeichen, die höchstens in einen Fingerabdruck einfließen
+
+
+def _ref_texts(v: dict, limit: int = FULL_LIMIT) -> tuple:
+    """(Text, Titel) der Referenztexte eines Vorbilds – vollständig, nur zum Messen."""
+    if v.get("art") != "autor" or not v.get("referenz_texte"):
+        return "", ""
+    p = profiles.get(v.get("profil_id"))
+    if not p:
+        return "", ""
+    meta = {t["id"]: t for t in p.get("texte", [])}
+    parts, titles = [], []
+    for tid in v["referenz_texte"]:
+        try:
+            parts.append(profiles.read_text(p["id"], tid))
+            titles.append(meta.get(tid, {}).get("titel") or tid)
+        except LookupError:
+            continue
+    return "\n\n".join(parts)[:limit], ", ".join(titles)
+
+
+def _own_full(v: dict, limit: int = FULL_LIMIT) -> tuple:
+    if v.get("art") != "mensch":
+        return "", ""
+    p = profiles.get(v.get("profil_id"))
+    if not p:
+        return "", ""
+    chosen = set(v.get("texte") or [])
+    parts, titles = [], []
+    for t in p.get("texte", []):
+        if t["id"] in chosen and not t.get("fremd"):
+            try:
+                parts.append(profiles.read_text(p["id"], t["id"]))
+                titles.append(t.get("titel") or t["id"])
+            except LookupError:
+                continue
+    return "\n\n".join(parts)[:limit], ", ".join(titles)
+
+
+def _excerpts(text: str, n: int, size: int) -> str:
+    """n kurze Auszüge, gleichmäßig über den Text verteilt, an Absatzgrenzen geschnitten."""
+    out = []
+    for i in range(n):
+        start = int(len(text) * (i + 0.5) / n)
+        cut = text.find("\n\n", start)
+        start = cut + 2 if 0 <= cut < start + size else start
+        piece = text[start:start + size]
+        end = piece.rfind("\n\n")
+        out.append((piece[:end] if end > size // 2 else piece).strip())
+    return "\n[…]\n".join(x for x in out if x)
+
+
+def fingerprint_source(v: dict) -> tuple:
+    """(Text, Quelle, Titel) für den Fingerabdruck: eigene Texte → Referenztexte → freigegebene Probe → Import-Basis."""
+    own, titles = _own_full(v)
+    if own:
+        return own, "eigene Texte", titles
+    ref, titles = _ref_texts(v)
+    if ref:
+        return ref, "Referenztexte des Vorbilds", titles
+    probe = v.get("probe") or {}
+    if probe.get("freigegeben") and probe.get("text"):
+        return probe["text"], "freigegebene Probe", ""
+    basis = (v.get("basis") or {}).get("referenz") or ""
+    if basis:
+        return basis, "mitgebrachter Maßstab (Import)", ""
+    return "", "", ""
+
+
 def _measure_texts(v: dict) -> None:
     sample = _texts(v, 60000)
     if sample and len(quality.words(sample)) >= 150:
         v["messwerte"] = dict(quality.style_values(sample), quelle="eigene Texte")
     elif (v.get("messwerte") or {}).get("quelle") == "eigene Texte":
         v["messwerte"] = None  # Basis weg (z. B. Text als fremd markiert) → kein veralteter Maßstab
+    ref, _ = _ref_texts(v, 200000)
+    if ref and len(quality.words(ref)) >= 150:
+        v["messwerte"] = dict(quality.style_values(ref), quelle="Referenztexte des Vorbilds")
+    elif (v.get("messwerte") or {}).get("quelle") == "Referenztexte des Vorbilds":
+        probe = v.get("probe") or {}
+        v["messwerte"] = dict(quality.style_values(probe["text"]), quelle="freigegebene Probe") \
+            if probe.get("freigegeben") and probe.get("text") else None
+    _fingerprint(v)
+
+
+def _fingerprint(v: dict) -> None:
+    """Stil-Fingerabdruck neu messen (nur Kennzahlen). Ohne Quelle: keiner – nie ein veralteter."""
+    text, quelle, titel = fingerprint_source(v)
+    v["fingerabdruck"] = stilprofil.fingerabdruck(text, quelle, titel) if text else None
+
+
+def refingerprint(vid: str) -> dict:
+    """Fingerabdruck auf Knopfdruck neu messen (z. B. nach neuer Version der Messung)."""
+    return _update(vid, _measure_texts)
 
 
 def refresh_owner(pid: str) -> None:
@@ -279,6 +409,9 @@ def refresh_owner(pid: str) -> None:
         for v in data["stimmen"]:
             if v.get("art") == "mensch" and v.get("profil_id") == pid:
                 v["texte"] = _clean_texts(pid, v.get("texte"))
+                _measure_texts(v)
+            elif v.get("art") == "autor" and v.get("profil_id") == pid and v.get("referenz_texte"):
+                v["referenz_texte"] = _clean_refs(pid, v.get("referenz_texte"))
                 _measure_texts(v)
         _save(data)
 
@@ -290,6 +423,9 @@ def reference_text(v: dict | None) -> str:
     sample = _texts(v, 40000)
     if sample:
         return sample
+    ref, _ = _ref_texts(v, 40000)
+    if ref:
+        return ref
     probe = v.get("probe") or {}
     return probe.get("text", "") if probe.get("freigegeben") else ""
 
@@ -345,6 +481,9 @@ def writer_block(v: dict | None) -> str:
         parts.append("JUSTIERUNG (gegenüber dem Vorbild):\n" + "\n".join(sliders))
     if v.get("hinweise"):
         parts.append("HINWEISE DES MENSCHEN ZUR STIMME (verbindlich):\n" + v["hinweise"])
+    targets = stilprofil.ziele(v.get("fingerabdruck"))
+    if targets:
+        parts.append(targets + ("\nDie Regler oben gehen diesen Zielen vor." if _slider_lines(v) else ""))
     anchor = anchors(v)
     if anchor:
         parts.append("STILANKER – so klingt diese Stimme (Ton, Rhythmus, Satzbau übernehmen; Inhalt NICHT übernehmen, "
@@ -369,6 +508,9 @@ def checker_block(v: dict | None) -> str:
         parts.append(f"MESSWERTE DES MASSSTABS ({m.get('quelle', '')}): Satzlänge Ø {m.get('satzlaenge')} Wörter, "
                      f"Dialoganteil {m.get('dialoganteil')}, Wortlänge Ø {m.get('wortlaenge')} Buchstaben, "
                      f"Absatzlänge Ø {m.get('absatzlaenge')} Wörter.")
+    targets = stilprofil.ziele(v.get("fingerabdruck"))
+    if targets:
+        parts.append(targets)
     parts.append("Weicht die Folge deutlich von dieser Stimme ab, melde es mit Kategorie „Stil“ in der Beschreibung "
                  "(„Stil: …“), Schwere „niedrig“ oder „mittel“, und gib als Korrektur an, was der Lektor ändern soll.")
     return "\n\n".join(parts)
@@ -381,6 +523,7 @@ def summary(v: dict | None) -> dict | None:
     return {"id": v["id"], "name": v["name"], "art": v["art"], "vorbild": v.get("vorbild"),
             "regler": {k: x for k, x in (v.get("regler") or {}).items() if x},
             "probe_freigegeben": bool((v.get("probe") or {}).get("freigegeben")), "messwerte": v.get("messwerte"),
+            "fingerabdruck": stilprofil.kurz(v.get("fingerabdruck")),
             "steckbrief_kurz": (v.get("steckbrief") or {}).get("kurz")}
 
 
@@ -402,6 +545,12 @@ def analyze(vid: str) -> dict:
     if v["art"] == "autor":
         system = ANALYZE_AUTHOR.format(vorbild=v["vorbild"], extra=extra, fields=_fields_schema())
         user = f"Vorbild: {v['vorbild']}"
+        ref, titles = _ref_texts(v)
+        if ref:  # eingelesenes Buch des Vorbilds: gemessene Werte + wenige kurze Auszüge, nur zur Analyse
+            fp = v.get("fingerabdruck") or stilprofil.fingerabdruck(ref, "Referenztexte des Vorbilds", titles)
+            user += ("\n\nGEMESSEN an seinen Texten (" + titles + ") – der Steckbrief muss dazu passen:\n"
+                     + stilprofil.ziele(fp) + "\n\nKURZE AUSZÜGE NUR ZUR STILANALYSE (nichts daraus zitieren, keine "
+                     "Figuren, Orte oder Handlung übernehmen):\n\n" + _excerpts(ref, 4, 1500))
     elif v["art"] == "mensch":
         sample = _texts(v, 20000)
         if not sample:
@@ -463,10 +612,12 @@ def approve_probe(vid: str, ok: bool = True) -> dict:
             raise VoiceError("Es gibt noch keine Probe.")
         p["freigegeben"] = bool(ok)
         p["freigegeben_am"] = _now() if ok else None
-        if x["art"] != "mensch" and ok:
+        refs = x["art"] == "autor" and bool(x.get("referenz_texte"))
+        if x["art"] != "mensch" and not refs and ok:
             x["messwerte"] = dict(quality.style_values(p["text"]), quelle="freigegebene Probe")
-        elif x["art"] != "mensch":
+        elif x["art"] != "mensch" and not refs:
             x["messwerte"] = None
+        _fingerprint(x)
     return _update(vid, apply)
 
 
@@ -514,6 +665,9 @@ def resolve(conn, stimme_id: str | None, thread_id: int | None) -> tuple:
 def public(v: dict) -> dict:
     """Für die Oberfläche: Basis aus verborgenen Texten nur als Kennzahlen, nie als Text."""
     out = dict(v)
+    if out.get("fingerabdruck"):
+        out["fingerabdruck"] = stilprofil.kurz(v["fingerabdruck"])
+        out["fingerabdruck_tabelle"] = stilprofil.tabelle(v["fingerabdruck"])
     basis = v.get("basis")
     if basis:
         out["basis"] = {k: basis.get(k) for k in ("owner", "owner_name", "verborgen", "quelle", "importiert")}

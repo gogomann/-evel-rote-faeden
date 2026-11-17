@@ -345,3 +345,7 @@ tr.sel td { background: var(--accent-soft); }
 .chatgpt-btn:hover { background: #222; }
 .chatgpt-btn:disabled { opacity: .6; }
 .cg-plan a { color: inherit; }
+
+/* Stil-Abgleich (Fingerabdruck) */
+.qtable tr.warn-row td { background: rgba(214, 160, 40, 0.10); }
+.qtable tr.bad-row td { background: rgba(200, 60, 60, 0.10); }

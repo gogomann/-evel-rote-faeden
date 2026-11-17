@@ -87,7 +87,7 @@ SQLite ersetzt PostgreSQL auf Wunsch des Nutzers. Basisschema in `story_world/sc
 ## Ergänzungen Version 15 (Herkunft eingelesener Texte)
 - `impulses.besitzer` (Profil-ID), `impulses.quelle_text` (Text-id), `impulses.fremd` (Text eines anderen Autors),
   `impulses.content_verborgen`: Inhalt nach Import von einem fremden Profil – die KI nutzt ihn, die Oberfläche zeigt ihn nicht
-- Profil-Text: `fremd`, `autor` (fremder Text ist nie Stilprobe und nie Basis einer Stimme)
+- Profil-Text: `fremd`, `autor` (fremder Text ist nie Stilprobe und nie Basis einer Stimme – ab 0.4.0 aber als Referenz eines Vorbilds messbar)
 - Stimme: `basis` {owner, owner_name, anker, referenz, verborgen, quelle} – Stilanker und Maßstab-Auszug aus einem Welt-Export
 
 ## Ergänzungen Version 16 (Form)
@@ -100,6 +100,12 @@ SQLite ersetzt PostgreSQL auf Wunsch des Nutzers. Basisschema in `story_world/sc
   Migration: bestehende Namen → erstes Wort Vorname, Rest Nachname.
 - `character_relations`: + reason (Grund der Verbindung), ended_world_time (Bruch seit, leer = besteht), break_reason (Grund des Bruchs)
 - Verweise auf Figuren zeigen „Vorname Nachname“.
+
+## Ergänzungen Version 18 (Aussprache-Lexikon)
+- `pronunciations`: + variants (Schreibvarianten, je Zeile/Komma), ignore_case (0/1), language (z. B. en, en-GB),
+  ipa (Lautschrift). Im Lesetext bleibt immer die Originalschreibweise; ersetzt wird nur beim Vertonen.
+  macOS und TTS-Server ohne SSML: term/Varianten → spoken. Azure/Google: mit IPA `<phoneme>`, mit Sprache `<lang>`
+  (Azure nur bei Multilingual-Stimmen, sonst IPA bzw. spoken). Der JSON-Export enthält alle Felder unter `aussprache`.
 
 ## Vorlage (world_meta `vorlage`, JSON)
 - titel, autor, modus (`start`|`fortsetzung`), genre_modus (`fest`|`frei`), genre_id, datei, zeichen, status
@@ -115,3 +121,15 @@ SQLite ersetzt PostgreSQL auf Wunsch des Nutzers. Basisschema in `story_world/sc
 - Weltzeit immer als Zahl. Darstellung in Volkskalender-Namen nur bei Ausgabe.
 - Backstage-Tabellen (mysteries.wahrheit) nicht an den Nutzer ausgeben, außer auf Wunsch.
 - Vektor-DB speichert Folgen-Zusammenfassungen und Fakten für Retrieval.
+
+## Ergänzungen 0.4.0 (Stil-Fingerabdruck, kein neues Datenbankschema)
+- Stimme: `referenz_texte` (nur art „autor“): Texte des Profils – auch fremde, z. B. ein eingelesenes Buch des Vorbilds –,
+  die nur gemessen werden. Sie gehen nie als Vorlage an die Schreib-KI; für den Steckbrief höchstens kurze Analyse-Auszüge.
+- Stimme: `fingerabdruck` {version, quelle, titel, woerter, abschnitte, erstellt, werte {merkmal: {mittel, streuung}},
+  funktionswoerter {wort: {mittel, streuung}}, delta {mittel, streuung}, wortschatz {wort: je 1000}} – nur Kennzahlen.
+  Quelle in dieser Reihenfolge: eigene Texte → Referenztexte → freigegebene Probe → mitgebrachter Maßstab (Import).
+  Stimmen von vorher werden beim ersten Laden einmal nachgemessen.
+- `episodes.metrics.stilbericht` {wert 0–100, urteil passt · auffaellig · stark · zu_kurz, satz, merkmale [{id, label, folge,
+  vorbild, spanne_text, z, urteil, satz}], auffaellige_woerter, quelle, stimme}; `episodes.metrics.freigabe_gruende` [Text]
+- Qualitätstest `stil_treue` (0–100, höher ist besser, Grenze 50)
+- Welt-Einstellung `stil_anhalten`: `stark` (Folge mit deutlicher Stil-Abweichung wartet auf Freigabe) · `nie` (nur anzeigen)

@@ -99,6 +99,7 @@ OPENAI_VOICES = [("alloy", None), ("ash", "male"), ("ballad", "male"), ("coral",
 ELEVEN_PCM_RATE = 24000
 MODI = {"hoerspiel": "Hörspiel – jede Figur eigene Stimme", "hoerbuch": "Hörbuch – eine Stimme liest alles"}
 DEFAULT_MAX_CHARS = 400
+SSML_TYPES = ("azure", "google")  # Aussprache-Lexikon mit Sprache/IPA als <lang>/<phoneme>; sonst die Sprechfassung
 DEFAULT_TIMEOUT = 300
 PAUSE_SEGMENT_SAME = 0.45
 PAUSE_SEGMENT_CHANGE = 0.3
@@ -552,7 +553,9 @@ def synth(s: dict, text: str, voice: str, language: str | None = None) -> bytes:
             raise _not_audio(s, raw, ctype)
         return raw if raw[:4] == b"RIFF" else pcm_to_wav(raw, ELEVEN_PCM_RATE)
     if typ == "google":
-        body = {"input": {"text": text}, "voice": {"languageCode": _locale_of(voice, language), "name": voice},
+        from .audio import has_ssml, to_ssml
+        source = {"ssml": f"<speak>{to_ssml(text)}</speak>"} if has_ssml(text) else {"text": text}
+        body = {"input": source, "voice": {"languageCode": _locale_of(voice, language), "name": voice},
                 "audioConfig": {"audioEncoding": "LINEAR16"}}
         raw, ctype = _http(s, "POST", "/text:synthesize", body)
         try:
@@ -561,9 +564,11 @@ def synth(s: dict, text: str, voice: str, language: str | None = None) -> bytes:
             raise _not_audio(s, raw, ctype)
         return audio if audio[:4] == b"RIFF" else pcm_to_wav(audio, 24000)
     if typ == "azure":
+        from .audio import to_ssml
         locale = _locale_of(voice, language)
         ssml = (f"<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{locale}'>"
-                f"<voice name='{xml_escape(voice, {chr(39): '&apos;'})}'>{xml_escape(text)}</voice></speak>")
+                f"<voice name='{xml_escape(voice, {chr(39): '&apos;'})}'>"
+                f"{to_ssml(text, allow_lang='multilingual' in voice.lower())}</voice></speak>")
         raw, ctype = _http(s, "POST", "/cognitiveservices/v1", ssml.encode("utf-8"),
                            headers={"Content-Type": "application/ssml+xml",
                                     "X-Microsoft-OutputFormat": "riff-24khz-16bit-mono-pcm"})
@@ -675,6 +680,9 @@ def chunk_text(text: str, limit: int) -> list:
             while len(clause) > limit:
                 cut = clause.rfind(" ", 0, limit)
                 cut = cut if cut > limit // 3 else limit
+                start = clause.rfind("\uE000", 0, cut)  # Aussprache-Platzhalter (audio.apply_lexicon) nie zerteilen
+                if start > clause.rfind("\uE001", 0, cut):
+                    cut = start if start > 0 else (clause.find("\uE001", cut) + 1 or limit)
                 pieces.append(clause[:cut].strip())
                 clause = clause[cut:].strip()
             if clause:
@@ -871,7 +879,8 @@ def speak_single(segments: list, ref: str, target: Path, words: list | None = No
     server = get_server(sid, cfg)
     language = language_of(server, voice)
     limit = int(server.get("max_zeichen") or DEFAULT_MAX_CHARS)
-    parts = [chunk_text(audio.apply_lexicon(t, words or []), limit) for t in segments if (t or "").strip()]
+    ssml = server.get("typ") in SSML_TYPES
+    parts = [chunk_text(audio.apply_lexicon(t, words or [], ssml), limit) for t in segments if (t or "").strip()]
     if not parts:
         raise TTSError("Kein Text zum Vorlesen.")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -930,7 +939,7 @@ def render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | N
     for seg in [intro] + p["segmente"]:
         s = by_id[seg["server"]]
         limit = int(s.get("max_zeichen") or DEFAULT_MAX_CHARS)
-        items.append((seg, chunk_text(audio.apply_lexicon(seg["text"], words), limit)))
+        items.append((seg, chunk_text(audio.apply_lexicon(seg["text"], words, s.get("typ") in SSML_TYPES), limit)))
     total = sum(len(c) for _, c in items) or 1
     conn.commit()  # Protokoll schreibt über eine eigene Verbindung
     run = runs.Run(conn, "Hörbuch (TTS-Server)", f"Folge {p['folge']}: {p['titel'] or ''}", "audio",

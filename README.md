@@ -10,6 +10,15 @@ Ein Programm, das mit dir Geschichten, Serien und Hörbücher schreibt – und d
 Das Programm ist BYOK (Bring Your Own Key), also damit entschiden Sie ob local oder Online LLM Sie nutzen. By OpnAi ist auch der OAuth möglich. 
 
 ---
+## install
+es braucht nur [python](https://www.python.org/downloads/)  Version Python 3.15 oder höher. 
+
+### Mac & Linux
+Mac run `bash brew install python`  
+Kontrolle run `bash python3 --version`
+
+### Windwos
+Install [Python install manager](https://www.python.org/downloads/release/pymanager-264/)
 
 ## ✨ Was es kann
 

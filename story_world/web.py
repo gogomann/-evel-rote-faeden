@@ -27,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import austausch, audio, chatgpt, tts, daily, vorlage, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, stimmen, szenarien, update, vergleich, worlds
+from . import austausch, audio, chatgpt, tts, daily, vorlage, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, stilprofil, stimmen, szenarien, update, vergleich, worlds
 
 STATIC = Path(__file__).with_name("static")
 FAVICON = STATIC / "favicon"
@@ -751,6 +751,16 @@ def get_episode(req, body, slug, episode_id):
         return episodes.get_episode(conn, int(episode_id), req.reveal)
 
 
+@route("GET", W + r"/episodes/(?P<episode_id>\d+)/stil")
+def get_episode_style(req, body, slug, episode_id):
+    q = _query(req)
+    with worlds.open_world(slug) as conn:
+        try:
+            return episodes.style_check(conn, int(episode_id), q.get("stimme") or None)
+        except LookupError as exc:
+            raise HTTPError(404, str(exc))
+
+
 def _query(req) -> dict:
     return {k: v[0] for k, v in parse_qs(urlparse(req.path).query).items()}
 
@@ -786,7 +796,8 @@ def post_episode_release(req, body, slug, episode_id):
         service.audit(conn, "nutzer", "freigabe", "episodes", int(episode_id))
         row = conn.execute("SELECT run_id FROM episodes WHERE id = ?", (int(episode_id),)).fetchone()
         runs.record_event(conn, row[0] if row else None, "freigabe", "entscheidung", "Du hast die Folge freigegeben",
-                          regel="Folgen mit schwerem Prüfer-Befund zählen erst nach deiner Freigabe.", ausgang="mensch",
+                          regel="Folgen mit schwerem Prüfer-Befund oder deutlicher Stil-Abweichung zählen erst nach "
+                                "deiner Freigabe.", ausgang="mensch",
                           ergebnis={"folge": int(episode_id), "status": "fertig"})
         return {"ok": True}
 
@@ -934,7 +945,7 @@ def get_stimmen(req, body):
     data["stimmen"] = [stimmen.public(v) for v in data["stimmen"]]
     data["archiv"] = [stimmen.public(v) for v in data["archiv"]]
     return dict(data, menschen=[{"id": p["id"], "name": p["name"],
-                                                  "texte": [{k: t.get(k) for k in ("id", "titel", "woerter", "stil")}
+                                                  "texte": [{k: t.get(k) for k in ("id", "titel", "woerter", "stil", "fremd", "autor")}
                                                             for t in p.get("texte", [])]}
                                                  for p in profiles.list_profiles()["profiles"]])
 
@@ -992,6 +1003,19 @@ def post_voice_probe_audio(req, body, vid):
             ref = ref or tts.cast(conn).get(episodes.NARRATOR, "")
             words = audio.lexicon(conn)
     return _voice_call(stimmen.probe_audio, vid, ref, words)
+
+
+@route("POST", "/api/stimmen/erkennen")
+def post_voice_detect(req, body):
+    text = str(body.get("text") or "")
+    if len(text) > 3_000_000:
+        raise HTTPError(400, "Text zu lang (höchstens 3 Mio. Zeichen).")
+    return stilprofil.erkennen(text, stimmen.with_fingerprint())
+
+
+@route("POST", V + "/fingerabdruck")
+def post_voice_fingerprint(req, body, vid):
+    return stimmen.public(stimmen.refingerprint(vid))
 
 
 @route("POST", V + "/probe/freigeben")
@@ -1057,7 +1081,9 @@ def put_profile_text(req, body, pid, tid):
 
 @route("POST", T + "/archivieren")
 def post_profile_text_archive(req, body, pid, tid):
-    return profiles.archive_text(pid, tid)
+    result = profiles.archive_text(pid, tid)
+    stimmen.refresh_owner(pid)  # archivierter Text zählt nicht mehr als Basis oder Referenz
+    return result
 
 
 @route("POST", T + "/wiederherstellen")
