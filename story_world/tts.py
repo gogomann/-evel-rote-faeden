@@ -32,6 +32,7 @@ import re
 import sqlite3
 import struct
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -919,10 +920,34 @@ def speak_single(segments: list, ref: str, target: Path, words: list | None = No
             "stuecke": pieces, "abtastrate": rate}
 
 
+_RUNNING: set = set()
+_RUNNING_LOCK = threading.Lock()
+
+
+def is_rendering(slug: str, episode_id: int) -> bool:
+    with _RUNNING_LOCK:
+        return (slug, int(episode_id)) in _RUNNING
+
+
 def render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | None = None, speak=None,
            cfg: dict | None = None, as_mp3: bool | None = None) -> Path:
     """Folge über die TTS-Server vertonen. speak/cfg sind für Tests austauschbar.
-    as_mp3: None = MP3, wenn lame/ffmpeg vorhanden; False = nur WAV."""
+    as_mp3: None = MP3, wenn lame/ffmpeg vorhanden; False = nur WAV.
+    Je Folge läuft höchstens eine Vertonung (gleiche Teil- und Zieldateien)."""
+    key = (slug, int(episode_id))
+    with _RUNNING_LOCK:
+        if key in _RUNNING:
+            raise TTSError("Diese Folge wird gerade schon vertont – bitte warten, bis der Lauf fertig ist.")
+        _RUNNING.add(key)
+    try:
+        return _render(conn, slug, episode_id, job_id, speak, cfg, as_mp3)
+    finally:
+        with _RUNNING_LOCK:
+            _RUNNING.discard(key)
+
+
+def _render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | None, speak, cfg: dict | None,
+            as_mp3: bool | None) -> Path:
     from . import audio  # Aussprache-Lexikon und Pausen wie bei der macOS-Vertonung
 
     speak = speak or synth

@@ -1281,6 +1281,8 @@ def post_episode_tts_render(req, body, slug, episode_id):
         p = tts.plan(conn, int(episode_id))
     if p["fehlt"]:
         raise HTTPError(400, "Keine Stimme für: " + ", ".join(p["fehlt"]) + ".")
+    if tts.is_rendering(slug, int(episode_id)):
+        raise HTTPError(409, "Diese Folge wird gerade schon vertont – Fortschritt oben rechts.")
 
     def work(job_id):
         with worlds.open_world(slug) as conn:

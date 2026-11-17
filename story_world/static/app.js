@@ -2892,7 +2892,8 @@ async function ttsCard(id) {
   $("#tts-mode").onchange = (e) => save({ modus: e.target.value });
   if ($("#tts-single")) $("#tts-single").onchange = (e) => save({ stimme: e.target.value });
   box.querySelectorAll("[data-cast]").forEach((sel) => (sel.onchange = () => save({ besetzung: { [sel.dataset.cast]: sel.value } })));
-  $("#tts-render").onclick = () => guard(async () => {
+  $("#tts-render").onclick = (e) => guard(async () => {
+    e.target.disabled = true;  // Doppelklick startet sonst zwei Vertonungen derselben Folge
     await api(W(`/episodes/${id}/tts/vertonen`), { method: "POST", body: {} });
     toast("Vertonung über TTS-Server läuft – Fortschritt oben rechts."); pollJobs();
   });

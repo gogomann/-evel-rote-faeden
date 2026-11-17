@@ -186,6 +186,15 @@ class TTSTests(unittest.TestCase):
             self.assertEqual(len(FakeTTS.requests), calls)
             self.assertEqual(len(list((path.parent / "_alt").glob("*.wav"))), 1)  # altes Ergebnis beiseitegelegt
 
+            tts._RUNNING.add((slug, 1))                                          # läuft schon: zweiter Start abgelehnt
+            try:
+                with self.assertRaises(tts.TTSError):
+                    tts.render(conn, slug, 1, as_mp3=False)
+                self.assertTrue(tts.is_rendering(slug, 1))
+            finally:
+                tts._RUNNING.discard((slug, 1))
+            self.assertTrue(path.exists())                                       # nichts angefasst
+
             if mp3.available():                                                  # MP3 mit ID3-Tags, WAV nach _wav
                 out = tts.render(conn, slug, 1)
                 self.assertEqual(out.suffix, ".mp3")

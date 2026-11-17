@@ -3,6 +3,10 @@
 Jede Version hat einen Abschnitt `## X.Y.Z – Kurztitel`. Nach einem Update zeigt Evel • Rote Fäden die Abschnitte
 seit der zuletzt genutzten Version als Hinweis an (auch nach manuellem ZIP-Entpacken).
 
+## 0.6.1 – Vertonung nicht doppelt starten
+- Fehler behoben: Wurde „Neu vertonen“ zweimal kurz hintereinander gestartet (z. B. Doppelklick), liefen zwei Vertonungen derselben Folge gleichzeitig, schoben sich gegenseitig die Datei weg und brachen mit „No such file or directory“ ab.
+- Jetzt läuft je Folge höchstens eine Vertonung; ein zweiter Start bekommt sofort den Hinweis „wird gerade schon vertont“. Der Knopf ist nach dem Klick gesperrt.
+
 ## 0.6.0 – Systemprüfung beim Start
 - Beim ersten Start nach dem Entpacken (und nach jedem Update) prüft Evel, ob die Zusatzprogramme da sind: MP3-Encoder (lame oder ffmpeg) und auf dem Mac die Systemstimmen.
 - Fehlt der MP3-Encoder, fragt das Startfenster, ob er automatisch installiert werden soll – Enter genügt. Mac: über Homebrew (`lame`), Windows: über winget (FFmpeg). Geht das nicht, steht im Fenster, was zu tun ist.
