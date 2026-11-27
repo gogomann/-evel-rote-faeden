@@ -33,7 +33,7 @@ from pathlib import Path
 
 from .database import initialize
 
-LATEST_VERSION = 18
+LATEST_VERSION = 19
 
 # Schemaänderungen bestehender Welten seit Programmstart – für den Hinweis in der Oberfläche nach einem Update.
 REPORTS: list = []
@@ -539,6 +539,21 @@ def _migrate_to_18(connection: sqlite3.Connection) -> None:
             connection.execute(f"ALTER TABLE pronunciations ADD COLUMN {name} {sql}")
 
 
+def _migrate_to_19(connection: sqlite3.Connection) -> None:
+    """Hörer-Bewertung je Folge: Sterne, was gut/schlecht war, Kommentar – fließt in künftige Folgen ein."""
+    connection.execute("""
+CREATE TABLE IF NOT EXISTS episode_ratings (
+    id INTEGER PRIMARY KEY,
+    episode_id INTEGER NOT NULL UNIQUE REFERENCES episodes(id),
+    stars INTEGER NOT NULL CHECK (stars BETWEEN 1 AND 5),
+    good TEXT,
+    bad TEXT,
+    comment TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)""")
+
+
 def _migrate_to_3(connection: sqlite3.Connection) -> None:
     connection.execute(_V3_TECHNOLOGIES)
     if "perspective_of_episode_id" not in _columns(connection, "episodes"):
@@ -608,6 +623,8 @@ def migrate(connection: sqlite3.Connection, db_path: Path | None = None) -> dict
             _migrate_to_17(connection)
         if version < 18:
             _migrate_to_18(connection)
+        if version < 19:
+            _migrate_to_19(connection)
         connection.execute(f"PRAGMA user_version = {LATEST_VERSION}")
         connection.execute("COMMIT")
     except Exception:

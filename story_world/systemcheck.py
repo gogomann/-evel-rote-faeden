@@ -1,12 +1,15 @@
-"""Systemprüfung beim Start: Sind die Zusatzprogramme da (MP3-Encoder, macOS-Stimmen)? Fehlendes wird – nach
-Rückfrage im Startfenster – automatisch installiert, soweit das ohne Technikwissen geht:
+"""Systemprüfung beim Start: Sind die Zusatzprogramme da (MP3-Encoder, macOS-Stimmen, Libra-TTS)? Fehlendes wird –
+nach Rückfrage im Startfenster – automatisch installiert, soweit das ohne Technikwissen geht:
 
 - macOS mit Homebrew: `brew install lame`
 - Windows mit winget: `winget install Gyan.FFmpeg`
+- Libra-TTS (mitgeliefert, optional): Python-Umgebung + Sprachmodell in zusatz/libra-tts (libra.py)
 - sonst: verständlicher Hinweis, was zu tun ist.
 
 Gefragt wird nur beim ersten Start einer Version (nach dem Entpacken bzw. nach einem Update); danach wird nur
-noch kurz gemeldet, was fehlt. Der Stand liegt in _update/systempruefung.json.
+noch kurz gemeldet, was fehlt (optionale Punkte nicht). Lehnt man Libra-TTS ab, fragt erst `system` wieder.
+Nach einem Update zieht jeder Start bei Libra-TTS neue Pakete nach (libra.nachziehen), ohne zu fragen.
+Der Stand liegt in _update/systempruefung.json.
 `python3 -m story_world system` prüft jederzeit erneut und bietet die Installation wieder an.
 """
 
@@ -20,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, mp3
+from . import __version__, libra, mp3
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "_update" / "systempruefung.json"
@@ -57,11 +60,20 @@ def check() -> list:
         items.append({"id": "say", "name": "macOS-Stimmen (say)", "wofuer": "Vertonung mit den Systemstimmen",
                       "ok": bool(say), "detail": say or "Fehlt – Vertonung über TTS-Server geht trotzdem.",
                       "installierbar": False})
+    if libra.vorhanden():
+        ready = libra.eingerichtet()
+        items.append({"id": "libra", "name": "Libra-TTS (lokale Stimmen mit Stil und Geräuschen)", "optional": True,
+                      "wofuer": "Zusatzfunktion: Hörspiel offline vertonen mit Sprechstilen und Geräuschen "
+                                f"(einmaliger Download, {libra.DOWNLOAD_GROESSE})",
+                      "ok": ready, "detail": "eingerichtet" if ready else "nicht eingerichtet (optional)",
+                      "installierbar": not ready})
     return items
 
 
 def install(item_id: str = "mp3") -> bool:
     """Fehlendes installieren (Ausgabe läuft im Startfenster mit). True, wenn es danach gefunden wird."""
+    if item_id == "libra":
+        return libra.einrichten()
     if item_id != "mp3":
         return False
     cmd, hint = _install_command()
@@ -105,10 +117,24 @@ def _ask(question: str) -> bool:
     return answer in ("", "j", "ja", "y", "yes")
 
 
+def _box(lines: list) -> None:
+    width = min(80, max(len(line) for line in lines) + 4)
+    print("\n" + "═" * width)
+    for line in lines:
+        print(f"  {line}")
+    print("═" * width)
+
+
 def run(force: bool = False) -> list:
-    """Beim Start: prüfen, beim ersten Start einer Version Fehlendes zur Installation anbieten, Stand speichern."""
+    """Beim Start: prüfen, beim ersten Start einer Version Fehlendes zur Installation anbieten, Stand speichern.
+    Libra-TTS: nach einem Update fehlende Pakete nachinstallieren (ohne Rückfrage – war ja schon eingerichtet)."""
     state = _load()
     first = force or state.get("version") != __version__
+    declined = set(state.get("abgelehnt") or [])
+    try:
+        libra.nachziehen()
+    except Exception as exc:  # darf den Start nie verhindern
+        print(f"Libra-TTS: Nachinstallation übersprungen ({exc})")
     items = check()
     missing = [i for i in items if not i["ok"]]
     if first:
@@ -116,12 +142,24 @@ def run(force: bool = False) -> list:
         for i in items:
             print(f"  {'✓' if i['ok'] else '✗'} {i['name']} – {i['detail'] if not i['ok'] else 'vorhanden'}")
         for i in missing:
-            if i["installierbar"] and _ask(f"„{i['name']}“ fehlt ({i['wofuer']}). Jetzt automatisch installieren?"):
+            if not i["installierbar"] or (i.get("optional") and i["id"] in declined and not force):
+                continue
+            if i["id"] == "libra":
+                _box(libra.hinweis_zeilen())
+                question = "Libra-TTS jetzt einrichten (einmaliger Download, siehe oben)?"
+            else:
+                question = f"„{i['name']}“ fehlt ({i['wofuer']}). Jetzt automatisch installieren?"
+            if _ask(question):
+                declined.discard(i["id"])
                 install(i["id"])
+            elif i.get("optional") and sys.stdin and sys.stdin.isatty():  # nur echte Absage merken
+                declined.add(i["id"])
         items = check()
-    elif missing:
-        print("Hinweis: " + "; ".join(f"{i['name']} fehlt ({i['wofuer']})" for i in missing)
-              + " – erneut prüfen: python3 -m story_world system")
-    _save({"version": __version__, "geprueft_am": time.strftime("%Y-%m-%d %H:%M"),
+    else:
+        required = [i for i in missing if not i.get("optional")]
+        if required:
+            print("Hinweis: " + "; ".join(f"{i['name']} fehlt ({i['wofuer']})" for i in required)
+                  + " – erneut prüfen: python3 -m story_world system")
+    _save({"version": __version__, "geprueft_am": time.strftime("%Y-%m-%d %H:%M"), "abgelehnt": sorted(declined),
            "ergebnis": [{k: i[k] for k in ("id", "ok", "detail")} for i in items]})
     return items

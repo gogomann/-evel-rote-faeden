@@ -82,6 +82,8 @@ TASKS = [
     ("erwartung", "Hörer-Erwartung", "Sieht nur, was der Hörer kennt, und schreibt auf, was er als Nächstes erwartet."),
     ("bewerter", "Szenarien bewerten", "Misst Kanonpassung und Überraschung der Szenarien – möglichst ein anderes Modell als der Planer."),
     ("richter", "Qualitäts-Richter", "Bewertet Texte im Prüfstand und im Modellvergleich (läuft mit Temperatur 0)."),
+    ("regie", "Hörspiel-Regie", "Legt beim Vertonen je Absatz Sprechstil, Tempo und Geräusche (<sigh>, <laugh> …) fest "
+                                "– nur für TTS-Server, die das können (Libra-TTS)."),
 ]
 # Werte je Aufgabe (Expertenmodus). Fehlt ein Wert, gilt der Standard des Aufrufers.
 TASK_PARAMS = {"temperatur": (0.0, 2.0)}

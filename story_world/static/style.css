@@ -79,7 +79,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .chip.backstage { color: var(--warn); border-color: var(--warn); }
 .chip.gap { color: var(--accent-text); border-color: transparent; background: var(--accent-soft); }
 .chip.st-neu { color: var(--accent); border-color: var(--accent); }
-.chip.st-in_arbeit, .chip.st-laeuft { color: var(--ki); border-color: var(--ki); }
+.chip.st-in_arbeit, .chip.st-laeuft, .chip.st-beantwortet { color: var(--ki); border-color: var(--ki); }
 .chip.st-vorschlag, .chip.st-offen { color: var(--warn); border-color: var(--warn); }
 .chip.st-eingearbeitet, .chip.st-uebernommen, .chip.st-fertig, .chip.st-erledigt { color: var(--ok); border-color: var(--ok); }
 .chip.st-verworfen { color: var(--muted); }
@@ -349,3 +349,21 @@ tr.sel td { background: var(--accent-soft); }
 /* Stil-Abgleich (Fingerabdruck) */
 .qtable tr.warn-row td { background: rgba(214, 160, 40, 0.10); }
 .qtable tr.bad-row td { background: rgba(200, 60, 60, 0.10); }
+
+.rt-tag.rt-on-good { color: var(--ok); border-color: var(--ok); }
+.rt-tag.rt-on-bad { color: var(--warn); border-color: var(--warn); }
+
+/* Hörspiel-Regie: Geräusch-Leiste bleibt stehen, nur die Absätze scrollen */
+.regie-tags { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; position: sticky; top: 0; z-index: 4;
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+.regie-tags .tfilter { margin: 0; }
+.regie-scroll { max-height: 60vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.regie-scroll table { margin: 0; }
+.regie-scroll thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.regie-scroll textarea { width: 100%; box-sizing: border-box; }
+.regie-ton select { margin-top: 4px; max-width: 110px; }
+
+/* Update: besonders wichtige Hinweise (z. B. großer Zusatz-Download) groß und auffällig */
+.update-wichtig { border: 2px solid var(--warn); border-radius: var(--radius); background: var(--panel); color: var(--text);
+  padding: 14px 16px; margin: 10px 0; font-size: 16px; line-height: 1.55; }
+.update-wichtig-kopf { font-size: 19px; font-weight: 700; color: var(--warn); margin-bottom: 6px; }

@@ -284,7 +284,7 @@ def get_call(conn: sqlite3.Connection, call_id: int) -> dict:
 # ---------------------------------------------------------------- Nachvollzug
 
 PHASES = [("auftrag", "Auftrag & Gewichtung"), ("szenario", "Szenarien"), ("planer", "Planer"),
-          ("vorbereitung", "Vorbereitung"), ("autor", "Autor"), ("pruefer", "Prüfer"), ("lektor", "Lektor"),
+          ("vorbereitung", "Vorbereitung"), ("autor", "Autor"), ("pruefer", "Prüfer"), ("lektor", "Lektor"), ("nachbesserung", "Nachbesserung"),
           ("speichern", "Speichern"), ("archivar", "Archivar"), ("bewertung", "Bewertung"), ("freigabe", "Freigabe"),
           ("weltentwicklung", "Weltentwicklung"), ("uebernahme", "Übernahme"), ("ablauf", "Ablauf"),
           ("abbruch", "Abbruch")]

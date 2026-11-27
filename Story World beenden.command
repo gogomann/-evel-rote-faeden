@@ -1,9 +1,11 @@
 #!/bin/bash
-# Doppelklick beendet Story World: Server auf Port 8765 und alle "python -m story_world"-Prozesse.
+# Doppelklick beendet Story World: Server auf Port 8765, alle "python -m story_world"-Prozesse und den
+# mitgelieferten Libra-TTS-Server (zusatz/libra-tts/server.py).
 # Der MCP-Server für Claude (story_world_mcp.py) bleibt bewusst unangetastet.
 PORT=8765
 
-pids=$( { lsof -ti tcp:$PORT 2>/dev/null; pgrep -f -- "-m story_world( |$)" 2>/dev/null; } | sort -u )
+pids=$( { lsof -ti tcp:$PORT 2>/dev/null; pgrep -f -- "-m story_world( |$)" 2>/dev/null;
+          pgrep -f -- "libra-tts/server.py" 2>/dev/null; } | sort -u )
 
 if [ -z "$pids" ]; then
   echo "Story World läuft nicht."

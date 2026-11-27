@@ -40,6 +40,15 @@ Zeitplan – also besser nur eins von beiden nutzen.
 Aufgabenplanung → „Einfache Aufgabe erstellen“ → täglich 20:00 → Programm `py`, Argumente `-3 -m story_world taeglich WELT-SLUG`,
 „Starten in“ = Projektordner. Auch hier nur eins von beiden nutzen (eingebauter Zeitplan oder Aufgabenplanung).
 
+## Libra-TTS (mitgelieferter Sprach-Server)
+- Einrichten (einmalig, ca. 1,3 GB auf einem Mac mit Apple-Chip, ca. 2 GB auf Windows/Intel-Mac (Prozessor), mit NVIDIA-Grafikkarte bis ca. 4 GB; Quelle: Sprachmodell von Hugging Face (huggingface.co/Ekam/Libra-TTS), Python-Pakete von pypi.org (mit NVIDIA-Grafikkarte zusätzlich PyTorch von download.pytorch.org)): Rückfrage im Startfenster beim ersten Start, Einstellungen → TTS-Server → „Einrichten“
+  oder `python3 -m story_world libra einrichten`. Braucht Python 3.10 oder neuer (Story World selbst läuft ab 3.9).
+- Läuft danach automatisch mit Story World (nur auf diesem Rechner erreichbar) und beendet sich mit ihr; „Story World beenden“
+  beendet ihn ebenfalls. Status/Steuerung: `python3 -m story_world libra status|starten|stoppen`.
+- Log: `_update/libra.log`. Startet er nicht: Log ansehen, dann `python3 -m story_world libra einrichten` erneut.
+- Nicht gewünscht: unter Einstellungen → TTS-Server den Eintrag „Libra-TTS (mitgeliefert)“ archivieren – dann startet er nicht mehr.
+- Updates fassen `zusatz/libra-tts/.venv`, `models/` und `server.conf` nie an; neue Pakete installiert der nächste Start nach.
+
 ## Sicherung und Wiederherstellung
 - Vor jeder Schemaänderung automatisch, sonst Einstellungen → Sicherung → „Sicherung jetzt anlegen“ (`welten/backups/`).
 - Wiederherstellen: Einstellungen → Sicherung → „Als neue Welt öffnen“. Die aktuelle Welt und die Sicherung bleiben
@@ -77,10 +86,11 @@ Aufgabenplanung → „Einfache Aufgabe erstellen“ → täglich 20:00 → Prog
 - Läuft die Oberfläche auf einem anderen Port (`--port`), funktioniert die Anmeldung genauso (nur der Port darf wechseln).
 
 ## Update
-- Einstellungen → Update: prüft Codeberg (`releases/latest`, sonst höchster Tag `vX.Y.Z`), zeigt die Release-Notizen,
+- Einstellungen → Update: prüft GitHub (github.com/gogomann/-evel-rote-faeden: `releases/latest`, sonst höchster Tag `vX.Y.Z`), zeigt die Release-Notizen,
   lädt das ZIP nach `_update/` und ersetzt nur Programmdateien, die sich geändert haben. Alte Fassungen und entfallene
   Dateien → `_old/update-<alt>-nach-<neu>-<zeit>/`. Nutzerdaten (`welten/`, `exporte/`, `profile_texte/`,
-  `story_world.*.json`, `*.sqlite3`) werden nie angefasst. Schlägt etwas fehl, wird der alte Stand wiederhergestellt.
+  `story_world.*.json`, `*.sqlite3`) und Libras Umgebung/Modell (`zusatz/libra-tts/.venv`, `models/`, `server.conf`)
+  werden nie angefasst. Schlägt etwas fehl, wird der alte Stand wiederhergestellt.
 - Während KI-Aufträge laufen, sind Installieren und Neustart gesperrt. Neustart: Mac/Linux per Knopf (Seite lädt von selbst neu),
   Windows: Fenster schließen und neu starten. Der MCP-Server in Claude nutzt den neuen Stand erst nach einem Neustart von Claude.
 - Nach dem Neustart zeigt ein Hinweis, was neu ist (`AENDERUNGEN.md`) und welche Welten ein neues Schema bekommen haben.
@@ -110,8 +120,11 @@ Aufgabenplanung → „Einfache Aufgabe erstellen“ → täglich 20:00 → Prog
 2. Braucht die Version ein neueres Python, `__min_python__` in `story_world/__init__.py` anheben.
 3. Schemaänderungen nur als neue Migration in `migrations.py` (`LATEST_VERSION` + `_migrate_to_N`), nie bestehende ändern.
 4. Committen, Tag setzen und pushen: `git tag v0.2.0 && git push origin main v0.2.0`.
-5. Auf Codeberg zum Tag ein Release anlegen; der Beschreibungstext erscheint im Update-Dialog. Tag und `__version__` müssen
+5. Auf GitHub zum Tag ein Release anlegen; der Beschreibungstext erscheint im Update-Dialog. Tag und `__version__` müssen
    übereinstimmen, sonst bricht das Update ab.
+6. Besonders wichtige Hinweise (z. B. ein großer Zusatz-Download) in `AENDERUNGEN.md` als Zitatzeilen `> …` in den
+   Abschnitt der Version schreiben: Der Update-Dialog zeigt sie vor dem Installieren groß an (liest dafür `AENDERUNGEN.md`
+   des neuen Tags von raw.githubusercontent.com), der Hinweis nach dem Neustart ebenfalls.
 
 ## Export und Umzug
 - Einstellungen → Sicherung → „Export & Umzug“: **Welt** (Kanon, Folgen, Nachvollzug, alle genutzten Stimmen mit

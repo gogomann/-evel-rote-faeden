@@ -1,7 +1,8 @@
-"""Programm-Update über Codeberg-Releases (nur Python-Standardbibliothek).
+"""Programm-Update über GitHub-Releases (github.com/gogomann/-evel-rote-faeden, nur Python-Standardbibliothek).
 
 Ablauf:
-1. Prüfen: Codeberg-API `releases/latest` (gibt es kein Release: höchster Tag `vX.Y.Z`).
+1. Prüfen: GitHub-API `releases/latest` (gibt es kein Release: höchster Tag `vX.Y.Z`). Wichtige Hinweise der neuen
+   Version („> …“ in AENDERUNGEN.md) kommen vorab von raw.githubusercontent.com.
 2. Installieren: ZIP nach `_update/` laden, sicher entpacken, Version im Paket gegen das Release prüfen.
    Ersetzt werden nur Programmdateien, die sich wirklich geändert haben. Die alte Fassung jeder ersetzten oder
    entfallenen Datei kommt nach `_old/update-<alt>-nach-<neu>-<zeit>/` – gelöscht wird nichts.
@@ -35,9 +36,11 @@ from . import __version__
 from ._reparatur import MARKER, REPORT, copy_atomic
 
 ROOT = Path(__file__).resolve().parent.parent
-REPO = os.environ.get("STORY_UPDATE_REPO", "gogomann/evel-rote-faeden")
-WEB = os.environ.get("STORY_UPDATE_WEB", "https://codeberg.org").rstrip("/")
-API = f"{WEB}/api/v1"
+REPO = os.environ.get("STORY_UPDATE_REPO", "gogomann/-evel-rote-faeden")
+WEB = os.environ.get("STORY_UPDATE_WEB", "https://github.com").rstrip("/")
+API = os.environ.get("STORY_UPDATE_API", "https://api.github.com").rstrip("/")
+RAW = os.environ.get("STORY_UPDATE_RAW", "https://raw.githubusercontent.com").rstrip("/")
+QUELLE = "GitHub"
 CHANGELOG = "AENDERUNGEN.md"
 MAX_DOWNLOAD = 200 * 1024 * 1024
 MAX_UNPACKED = 500 * 1024 * 1024
@@ -45,7 +48,10 @@ AUTO_INTERVAL = 20 * 3600
 
 # Nie überschreiben, nie verschieben – egal was im Paket steht.
 PROTECTED_DIRS = {"welten", "exporte", "profile_texte", "_old", "_update", ".git", "__pycache__",
-                  "unsloth-tmp", "_gedaechtnis"}
+                  "unsloth-tmp", "_gedaechtnis", ".venv"}
+# Mitgelieferter Libra-TTS-Server: Python-Umgebung, Modell (ca. 1–2 GB) und Einstellungen gehören dem Nutzer.
+PROTECTED_PREFIXES = ("zusatz/libra-tts/models/", "zusatz/libra-tts/.venv/")
+PROTECTED_FILES = {"zusatz/libra-tts/server.conf"}
 PROTECTED_NAMES = {".mcp.json", ".DS_Store", "Thumbs.db"}
 PROTECTED_TOP = re.compile(r"^story_world\.[^/]+\.(json|tmp)$|^story_world\.[^/]+\.defekt-.*$")
 PROTECTED_SUFFIX = re.compile(r"\.sqlite3(-journal|-wal|-shm)?$|\.update-tmp$")
@@ -80,6 +86,8 @@ def is_dev(root: Path = ROOT) -> bool:
 
 def protected(rel: str) -> bool:
     path = PurePosixPath(rel)
+    if rel in PROTECTED_FILES or rel.startswith(PROTECTED_PREFIXES):
+        return True
     if any(part in PROTECTED_DIRS for part in path.parts):
         return True
     if path.name in PROTECTED_NAMES or PROTECTED_SUFFIX.search(path.name):
@@ -162,34 +170,60 @@ def check_python(required: str | None, new_version: str, current: tuple = None) 
                           "https://www.python.org/downloads/ installieren – dein Programm bleibt unverändert.", 409)
 
 
+def parse_changelog(text: str, after: str | None, upto: str) -> list:
+    """Abschnitte mit after < Version <= upto, neueste zuerst. Zeilen mit „> “ (Zitat) sind besonders wichtige Hinweise
+    (z. B. ein großer Zusatz-Download) – sie stehen getrennt in „wichtig“ und werden in der Oberfläche groß gezeigt."""
+    low = parse_version(after) if after else (-1,)
+    high = parse_version(upto)
+    out, current = [], None
+    for line in (text or "").splitlines():
+        head = re.match(r"^##\s+v?(\d+(?:\.\d+){0,2})\b(.*)$", line)
+        if head:
+            ver = parse_version(head.group(1))
+            current = {"version": version_text(head.group(1)), "titel": line[2:].strip(), "text": [], "wichtig": []} \
+                if low < ver <= high else None
+            if current:
+                out.append(current)
+        elif current is not None:
+            if line.startswith(">"):
+                current["wichtig"].append(line[1:].strip())
+            else:
+                current["text"].append(line)
+    for section in out:
+        section["text"] = "\n".join(section["text"]).strip()
+        section["wichtig"] = "\n".join(section["wichtig"]).strip()
+    return sorted(out, key=lambda s: parse_version(s["version"]), reverse=True)
+
+
 def changelog_sections(root: Path, after: str | None, upto: str) -> list:
     """Abschnitte aus AENDERUNGEN.md mit after < Version <= upto, neueste zuerst."""
     path = root / CHANGELOG
     if not path.exists():
         return []
-    low = parse_version(after) if after else (-1,)
-    high = parse_version(upto)
-    out, current = [], None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        head = re.match(r"^##\s+v?(\d+(?:\.\d+){0,2})\b(.*)$", line)
-        if head:
-            ver = parse_version(head.group(1))
-            current = {"version": version_text(head.group(1)), "titel": line[2:].strip(), "text": []} \
-                if low < ver <= high else None
-            if current:
-                out.append(current)
-        elif current is not None:
-            current["text"].append(line)
-    for section in out:
-        section["text"] = "\n".join(section["text"]).strip()
-    return sorted(out, key=lambda s: parse_version(s["version"]), reverse=True)
+    return parse_changelog(path.read_text(encoding="utf-8"), after, upto)
+
+
+def _fetch_changelog(tag: str) -> str | None:
+    """AENDERUNGEN.md der neuen Version von GitHub (vor dem Installieren, für wichtige Hinweise). Fehler → None."""
+    from .providers import _ssl_context
+    url = f"{RAW}/{REPO}/{tag}/{CHANGELOG}"
+    request = urllib.request.Request(url, headers={"User-Agent": f"EvelRoteFaeden/{__version__} (Update)"})
+    try:
+        with urllib.request.urlopen(request, timeout=15, context=_ssl_context()) as response:
+            return response.read(2_000_000).decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def wichtige_hinweise(sections: list) -> list:
+    return [{"version": s["version"], "text": s["wichtig"]} for s in sections if s.get("wichtig")]
 
 
 # ---------------------------------------------------------------- Prüfen
 
 def _get_json(url: str, timeout: int = 15):
     from .providers import _ssl_context
-    request = urllib.request.Request(url, headers={"Accept": "application/json",
+    request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
                                                    "User-Agent": f"EvelRoteFaeden/{__version__} (Update)"})
     try:
         with urllib.request.urlopen(request, timeout=timeout, context=_ssl_context()) as response:
@@ -197,17 +231,19 @@ def _get_json(url: str, timeout: int = 15):
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
-        raise UpdateError(f"Codeberg antwortet mit Fehler {exc.code}.", 502)
+        if exc.code == 403:
+            raise UpdateError(f"{QUELLE} lässt gerade keine Abfrage zu (Limit) – bitte später erneut versuchen.", 502)
+        raise UpdateError(f"{QUELLE} antwortet mit Fehler {exc.code}.", 502)
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        raise UpdateError(f"Codeberg nicht erreichbar: {getattr(exc, 'reason', exc)}", 502)
+        raise UpdateError(f"{QUELLE} nicht erreichbar: {getattr(exc, 'reason', exc)}", 502)
 
 
 def _archive_url(tag: str) -> str:
-    return f"{WEB}/{REPO}/archive/{tag}.zip"
+    return f"{WEB}/{REPO}/archive/refs/tags/{tag}.zip"
 
 
 def check(root: Path = ROOT) -> dict:
-    """Neueste veröffentlichte Version auf Codeberg ermitteln und mit der laufenden vergleichen."""
+    """Neueste veröffentlichte Version auf GitHub ermitteln und mit der laufenden vergleichen."""
     found = None
     release = _get_json(f"{API}/repos/{REPO}/releases/latest")
     if release and release.get("tag_name") and not release.get("draft"):
@@ -216,9 +252,9 @@ def check(root: Path = ROOT) -> dict:
         found = {"tag": release["tag_name"], "notizen": release.get("body") or "",
                  "titel": release.get("name") or release["tag_name"],
                  "veroeffentlicht": release.get("published_at") or "",
-                 "zip": zips[0] if zips else (release.get("zipball_url") or _archive_url(release["tag_name"]))}
+                 "zip": zips[0] if zips else _archive_url(release["tag_name"])}
     else:
-        tags = _get_json(f"{API}/repos/{REPO}/tags?limit=50") or []
+        tags = _get_json(f"{API}/repos/{REPO}/tags?per_page=100") or []
         versioned = []
         for tag in tags:
             name = str(tag.get("name", ""))
@@ -227,15 +263,19 @@ def check(root: Path = ROOT) -> dict:
         if versioned:
             _, tag = max(versioned, key=lambda x: x[0])
             found = {"tag": tag["name"], "notizen": "", "titel": tag["name"], "veroeffentlicht": "",
-                     "zip": tag.get("zipball_url") or _archive_url(tag["name"])}
+                     "zip": _archive_url(tag["name"])}
     result = {"aktuell": __version__, "entwickler": is_dev(root), "geprueft": time.strftime("%Y-%m-%d %H:%M")}
     if not found:
         result.update({"neueste": None, "neuer": False})
     else:
         latest = version_text(found["tag"])
         result.update({"neueste": latest, "neuer": parse_version(latest) > parse_version(__version__), **found})
+        if result["neuer"]:  # wichtige Hinweise der neuen Version(en), z. B. großer Zusatz-Download
+            text = _fetch_changelog(found["tag"])
+            result["wichtig"] = wichtige_hinweise(parse_changelog(text, __version__, latest)) if text else []
     _save_state(root, letzte_pruefung=time.time(),
-                verfuegbar={k: result.get(k) for k in ("neueste", "tag", "titel", "notizen")} if result["neuer"] else None)
+                verfuegbar={k: result.get(k) for k in ("neueste", "tag", "titel", "notizen", "wichtig")}
+                if result["neuer"] else None)
     return result
 
 
@@ -258,8 +298,8 @@ def set_auto(enabled: bool, root: Path = ROOT) -> dict:
 # ---------------------------------------------------------------- Laden & Entpacken
 
 def download(url: str, target: Path) -> Path:
-    if not url.startswith(WEB + "/"):
-        raise UpdateError("Download-Adresse liegt nicht auf Codeberg – abgebrochen.")
+    if not url.startswith((f"{WEB}/{REPO}/", f"{API}/repos/{REPO}/")):
+        raise UpdateError(f"Download-Adresse liegt nicht im {QUELLE}-Repository – abgebrochen.")
     from .providers import _ssl_context
     request = urllib.request.Request(url, headers={"User-Agent": f"EvelRoteFaeden/{__version__} (Update)"})
     part = target.with_name(target.name + ".part")
@@ -358,8 +398,8 @@ def _install(zip_path: Path, root: Path, notes: str, tag: str) -> dict:
         changed = [rel for rel in new_files if not _same(package / rel, root / rel)]
         manifest = _read_json(work / "manifest.json").get("dateien")
         if manifest is None:  # erstes Update: Programmordner gelten vollständig als Programm
-            manifest = [rel for sub in ("story_world", "tests") if (root / sub).is_dir()
-                        for rel in (f"{sub}/{r}" for r in _files(root / sub))]
+            manifest = [rel for sub in ("story_world", "tests", "zusatz") if (root / sub).is_dir()
+                        for rel in (f"{sub}/{r}" for r in _files(root / sub)) if not protected(rel)]
         keep = set(new_files)
         removed = [rel for rel in manifest if rel not in keep and not protected(rel) and (root / rel).is_file()]
 
@@ -452,7 +492,8 @@ def status(root: Path = ROOT) -> dict:
     if available.get("neueste") and parse_version(available["neueste"]) > parse_version(__version__):
         out["verfuegbar"] = available
     if parse_version(seen) < parse_version(__version__):
-        out["neu"] = {"von": seen, "nach": __version__, "abschnitte": changelog_sections(root, seen, __version__),
+        sections = changelog_sections(root, seen, __version__)
+        out["neu"] = {"von": seen, "nach": __version__, "abschnitte": sections, "wichtig": wichtige_hinweise(sections),
                       "notizen": installed.get("notizen", "") if installed.get("nach") == __version__ else "",
                       "sicherung": installed.get("sicherung") if installed.get("nach") == __version__ else None}
     return out

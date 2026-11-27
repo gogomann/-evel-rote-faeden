@@ -1,0 +1,26 @@
+# Libra-TTS-Server – Einstellungen (KEY=WERT)
+# Reihenfolge: Startparameter > Umgebungsvariable LIBRA_<KEY> > diese Datei
+
+# Port und Adresse (0.0.0.0 = im ganzen Netz erreichbar, 127.0.0.1 = nur dieser Rechner)
+PORT=8880
+HOST=0.0.0.0
+
+# auto | mlx (Apple Silicon) | cuda (NVIDIA) | onnx (CPU) – setzt install automatisch
+BACKEND=auto
+
+# Standardsprache, wenn die Anfrage keine angibt.
+# auto = je Satz nach Schriftsystem; lateinische Schrift wird dann als ENGLISCH gelesen.
+# Für deutsche Texte: LANG=de
+LANG=auto
+
+# Standardstimme: nina sofia aliya maya omar jon bob sam
+VOICE=nina
+
+# Standard-Ausgabeformat: mp3 wav flac opus pcm (aac nur mit ffmpeg)
+FORMAT=mp3
+
+# Optional: API-Schlüssel. Leer = kein Schutz. Sonst Header "Authorization: Bearer <KEY>"
+API_KEY=
+
+# Nur CPU/onnx: Anzahl Threads (leer = automatisch)
+THREADS=

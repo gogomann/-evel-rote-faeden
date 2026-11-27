@@ -8,14 +8,17 @@
   python3 -m story_world vertonen <welt> <folge-nr> [--modus hoerbuch|hoerspiel]   Folge über TTS-Server vertonen (WAV)
   python3 -m story_world neu "Name der Welt" [--leer]
   python3 -m story_world migrate pfad.sqlite3 Datei auf aktuelles Schema bringen (mit Backup)
-  python3 -m story_world update [--nur-pruefen]  Programm von Codeberg aktualisieren (Daten bleiben unberührt)
+  python3 -m story_world update [--nur-pruefen]  Programm von GitHub aktualisieren (Daten bleiben unberührt)
   python3 -m story_world update --zurueck     Notfall: Stand vor dem letzten Update wiederherstellen
-  python3 -m story_world system              Systemprüfung (MP3-Encoder usw.), Fehlendes installieren
+  python3 -m story_world system              Systemprüfung (MP3-Encoder, Libra-TTS usw.), Fehlendes installieren
+  python3 -m story_world libra [status|einrichten|starten|stoppen]   mitgelieferter TTS-Server (zusatz/libra-tts)
   python3 -m story_world pfad.sqlite3         wie bisher: Basisschema anlegen/ergänzen
 """
 
 import argparse
+import json
 import sys
+import time
 from pathlib import Path
 
 from .database import connect, initialize
@@ -41,8 +44,32 @@ def main() -> None:
     elif command == "system":
         from . import systemcheck
         items = systemcheck.run(force=True)
-        if not all(i["ok"] for i in items):
+        if not all(i["ok"] or i.get("optional") for i in items):
             sys.exit(1)
+    elif command == "libra":
+        parser = argparse.ArgumentParser(prog="story_world libra")
+        parser.add_argument("aktion", nargs="?", default="status", choices=["status", "einrichten", "starten", "stoppen"])
+        opts = parser.parse_args(args[1:])
+        from . import libra
+        if opts.aktion == "einrichten":
+            if not libra.einrichten():
+                sys.exit(1)
+        elif opts.aktion == "stoppen":
+            print("Libra-TTS beendet." if libra.stoppen() else "Libra-TTS lief nicht.")
+        elif opts.aktion == "starten":  # im Vordergrund, bis Strg+C
+            try:
+                address = libra.bereit()
+                libra.eintragen(address)
+            except libra.LibraError as exc:
+                sys.exit(str(exc))
+            print(f"Libra-TTS läuft: {address}  (Web-Oberfläche dort) – Beenden mit Strg+C")
+            try:
+                while libra.laeuft():
+                    time.sleep(2)
+            except KeyboardInterrupt:
+                libra.stoppen()
+        else:
+            print(json.dumps(libra.status(), ensure_ascii=False, indent=1))
     elif command == "folge":
         parser = argparse.ArgumentParser(prog="story_world folge")
         parser.add_argument("welt")
@@ -115,7 +142,7 @@ def main() -> None:
         try:
             info = update.check()
             if not info["neuer"]:
-                print(f"Aktuell: {info['aktuell']} (neueste auf Codeberg: {info['neueste'] or '–'}).")
+                print(f"Aktuell: {info['aktuell']} (neueste auf GitHub: {info['neueste'] or '–'}).")
             elif opts.nur_pruefen:
                 print(f"Neue Version {info['neueste']} verfügbar (installiert: {info['aktuell']}).")
             else:

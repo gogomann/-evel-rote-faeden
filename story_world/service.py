@@ -379,11 +379,14 @@ SETTINGS = {
     "stimme": "",
     # Stil-Abgleich per Fingerabdruck: "stark" = bei deutlicher Abweichung wartet die Folge auf deine Freigabe, "nie" = nur melden
     "stil_anhalten": "stark",
+    # Nachbesserung nach dem Lektorat: so viele Runden nachmessen und gezielt überarbeiten (0 = aus)
+    "nachbesserung_runden": "2",
 }
 BOOL_SETTINGS = {"auto_uebernehmen", "auto_folge"}
 INT_SETTINGS = {"folge_woerter": (500, 20000, "Folgenlänge"), "nachrichten_pro_tag": (0, 10, "Nachrichten pro Tag"),
                 "sprechtempo": (80, 260, "Sprechtempo"), "abweichung": (0, 3, "Überraschung"),
-                "szenarien": (1, 3, "Anzahl Szenarien"), "min_kanon": (0, 10, "Mindest-Kanonpassung")}
+                "szenarien": (1, 3, "Anzahl Szenarien"), "min_kanon": (0, 10, "Mindest-Kanonpassung"),
+                "nachbesserung_runden": (0, 3, "Nachbesserungsrunden")}
 CHOICE_SETTINGS = {"kontext_modus": ("voll", "kaskade"), "szenario_wahl": ("automatisch", "ich"),
                    "stil_anhalten": ("stark", "nie")}
 
@@ -948,7 +951,7 @@ def list_proposals(conn: sqlite3.Connection, reveal: bool = False) -> list:
         ops = [_describe_op(op, reveal, refs, new_refs) for op in raw_ops]
         row["operationen"] = [o for o in ops if not o["verborgen"]]
         row["verborgen"] = sum(1 for o in ops if o["verborgen"])
-        row["rueckfragen"] = payload.get("rueckfragen") or []
+        row["rueckfragen"] = normalize_questions(payload.get("rueckfragen"))
         row["fehler"] = validate_payload(payload) if row["status"] == "offen" else []
         row["result"] = json.loads(row["result"]) if row.get("result") else None
         out.append(row)
@@ -1043,6 +1046,101 @@ def reject_proposal(conn: sqlite3.Connection, proposal_id: int) -> None:
         if not open_left:
             set_impulse_status(conn, row["impulse_id"], "neu")
     audit(conn, "nutzer", "verwerfen", "proposals", proposal_id)
+
+
+OPTION_KEYS = ("A", "B", "C")
+_ANSWERS_MARK = "ANTWORTEN DES NUTZERS AUF DEINE RÜCKFRAGEN"
+_PREVIOUS_MARK = "DEIN VORHERIGER VORSCHLAG"
+
+
+def normalize_questions(raw) -> list:
+    """Rückfragen einheitlich als [{"frage": str, "optionen": [str, …]}] – ältere Vorschläge enthalten nur Text."""
+    out = []
+    for item in raw if isinstance(raw, list) else ([raw] if raw else []):
+        if isinstance(item, dict):
+            text = next((str(item[k]).strip() for k in ("frage", "question", "text") if item.get(k)), "")
+            opts = next((item[k] for k in ("optionen", "options", "antworten", "auswahl") if isinstance(item.get(k), list)), [])
+            opts = [str(o.get("text") or o.get("option") or "") if isinstance(o, dict) else str(o) for o in opts]
+        else:
+            text, opts = str(item).strip(), []
+        opts = [o.strip() for o in opts if o and o.strip()][:len(OPTION_KEYS)]
+        if text:
+            out.append({"frage": text, "optionen": opts})
+    return out
+
+
+def _answer_task(task: str, payload: dict, answers: list) -> str:
+    """Auftrag für die Überarbeitung: ursprünglicher Auftrag + alle bisherigen Antworten + vorheriger Vorschlag."""
+    base = task.split("\n\n" + _PREVIOUS_MARK)[0].rstrip()
+    lines = []
+    for n, a in enumerate(answers, 1):
+        if a["wahl"] == "frei":
+            reply = f"Freie Antwort: {a['text']}"
+        else:
+            reply = f"Option {a['wahl']}: {a['option']}" + (f" – Ergänzung: {a['text']}" if a["text"] else "")
+        lines.append(f"- Frage: {a['frage']}\n  Antwort: {reply}")
+    if _ANSWERS_MARK not in base:
+        base += (f"\n\n{_ANSWERS_MARK} (verbindliche Fakten wie Impulse):\n"
+                 "Hat der Nutzer klargestellt, dass ein Name hier etwas anderes meint als ein gleichnamiger Kanon-Eintrag "
+                 "(z. B. andere Dimension, anderes Reich gleichen Namens), lege dafür einen eigenen Datensatz an, statt den "
+                 "bestehenden zu ergänzen, und halte die Abgrenzung fest (z. B. als Weltregel oder Wissen), damit spätere "
+                 "Texte sie kennen. Frag nicht erneut, was hier beantwortet ist.")
+    previous = json.dumps({k: payload.get(k) for k in ("zusammenfassung", "operationen")}, ensure_ascii=False)
+    return (base + "\n" + "\n".join(lines)
+            + f"\n\n{_PREVIOUS_MARK} (überarbeite ihn anhand der Antworten; was weiterhin stimmt, übernimm):\n{previous}")
+
+
+def answer_proposal(conn: sqlite3.Connection, proposal_id: int, answers) -> dict:
+    """Nimmt die Antworten auf die Rückfragen an (je Frage A/B/C oder frei). Der Vorschlag gilt danach als
+    beantwortet (Status verworfen, Antworten im Ergebnis) und liefert den Auftrag für den überarbeiteten Vorschlag."""
+    row = conn.execute("SELECT * FROM proposals WHERE id = ?", (proposal_id,)).fetchone()
+    if row is None:
+        raise LookupError("Vorschlag nicht gefunden.")
+    if row["status"] != "offen":
+        raise ValidationError("Vorschlag wurde bereits entschieden.")
+    payload = json.loads(row["payload"])
+    questions = normalize_questions(payload.get("rueckfragen"))
+    if not questions:
+        raise ValidationError("Dieser Vorschlag hat keine Rückfragen.")
+    if not isinstance(answers, list) or len(answers) != len(questions):
+        raise ValidationError("Bitte jede Rückfrage beantworten.")
+    resolved = []
+    for n, (q, a) in enumerate(zip(questions, answers), 1):
+        a = a if isinstance(a, dict) else {}
+        choice = str(a.get("wahl") or "").strip().upper()
+        text = str(a.get("text") or "").strip()[:2000]
+        if choice in OPTION_KEYS[:len(q["optionen"])]:
+            option = q["optionen"][OPTION_KEYS.index(choice)]
+        elif choice == "FREI":
+            choice, option = "frei", None
+            if not text:
+                raise ValidationError(f"Rückfrage {n}: Freie Antwort ist leer.")
+        else:
+            raise ValidationError(f"Rückfrage {n}: Wähle A, B, C oder schreib eine freie Antwort.")
+        resolved.append({"frage": q["frage"], "optionen": q["optionen"], "wahl": choice, "option": option, "text": text})
+    result = {"beantwortet": True, "antworten": resolved, "neuer_vorschlag": None}
+    conn.execute("UPDATE proposals SET status='verworfen', result=?, decided_at=CURRENT_TIMESTAMP WHERE id=?",
+                 (json.dumps(result, ensure_ascii=False), proposal_id))
+    if row["impulse_id"]:
+        set_impulse_status(conn, row["impulse_id"], "in_arbeit")
+    audit(conn, "nutzer", "beantworten", "proposals", proposal_id, detail=f"{len(resolved)} Rückfrage(n)")
+    return {"task": _answer_task(row["task"], payload, resolved), "impulse_id": row["impulse_id"]}
+
+
+def link_answer(conn: sqlite3.Connection, proposal_id: int, new_id: int | None) -> None:
+    row = conn.execute("SELECT result FROM proposals WHERE id = ?", (proposal_id,)).fetchone()
+    result = json.loads(row["result"]) if row and row["result"] else {}
+    result["neuer_vorschlag"] = new_id
+    conn.execute("UPDATE proposals SET result=? WHERE id=?", (json.dumps(result, ensure_ascii=False), proposal_id))
+
+
+def revert_answer(conn: sqlite3.Connection, proposal_id: int) -> None:
+    """Überarbeitung gescheitert: Vorschlag wieder offen, damit die Rückfragen erneut beantwortet werden können."""
+    row = conn.execute("SELECT impulse_id FROM proposals WHERE id = ?", (proposal_id,)).fetchone()
+    conn.execute("UPDATE proposals SET status='offen', result=NULL, decided_at=NULL WHERE id=?", (proposal_id,))
+    if row and row["impulse_id"]:
+        set_impulse_status(conn, row["impulse_id"], "vorschlag")
+    audit(conn, "system", "beantworten_zurueck", "proposals", proposal_id)
 
 
 # ---------------------------------------------------------------- Kanon-Export für die KI

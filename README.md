@@ -33,15 +33,22 @@ Install [Python install manager](https://www.python.org/downloads/release/pymana
 | ⏱️ **Länge frei wählbar** | Du bestimmst, wie lang eine Folge oder Geschichte wird. |
 | 🧩 **Rätsel & Plot-Twists** | Geschichten mit Rätseln oder überraschenden Wendungen erstellen. |
 | 🎙️ **Export fürs Hörbuch** | Export für Text-to-Speech – als SSML oder als Rollentexte. So bekommt jede Figur ihre eigene Stimme. |
+| 🎭 **Hörspiel mit Libra-TTS** *(Zusatzfunktion)* | Eigener Sprach-Server, offline: 8 Stimmen, Sprechstile (warm, traurig, flüsternd …) und Geräusche (Seufzen, Lachen, Atmen). Die KI führt Regie, du kannst jeden Absatz einzeln anhören und neu aufnehmen. |
 | 🔌 **MCP-Schnittstelle** | Andere Programme greifen auf deine Weltdaten zu – z. B. für Comics – oder entwickeln Geschichten und Folgen weiter. |
 
 ---
 
 ## 🚀 Loslegen
 
-1. **ZIP herunterladen:** [codeberg.org/gogomann/evel-rote-faeden](https://codeberg.org/gogomann/evel-rote-faeden)
+1. **ZIP herunterladen:** [github.com/gogomann/-evel-rote-faeden](https://github.com/gogomann/-evel-rote-faeden) → „Code“ → „Download ZIP“ bzw. unter „Releases“
 2. **Entpacken** – immer in denselben Ordner.
 3. **Starten.** Beim ersten Start prüft das Programm, ob Zusatzprogramme fehlen (z. B. für den MP3-Export), und bietet an, sie zu installieren.
+
+> **Zusatzfunktion Libra-TTS (optional) – größerer Download, nur einmal**
+> Beim ersten Start fragt Evel, ob der mitgelieferte Sprach-Server **Libra-TTS** eingerichtet werden soll (Hörspiel-Stimmen mit Sprechstilen und Geräuschen, offline).
+> Dafür werden **einmalig ca. 1,3 GB auf einem Mac mit Apple-Chip, ca. 2 GB auf Windows/Intel-Mac (Prozessor), mit NVIDIA-Grafikkarte bis ca. 4 GB** geladen – Sprachmodell von Hugging Face (huggingface.co/Ekam/Libra-TTS), Python-Pakete von pypi.org (mit NVIDIA-Grafikkarte zusätzlich PyTorch von download.pytorch.org).
+> Das passiert nur beim Einrichten, nicht bei Updates. Danach ist Libra automatisch eingebunden und startet mit Evel. Braucht Python 3.10 oder neuer.
+> Du kannst ablehnen und es später unter **Einstellungen → TTS-Server → „Einrichten“** nachholen. Evel funktioniert auch ohne.
 
 Updates kommen per Knopfdruck direkt in der App.
 
@@ -52,11 +59,11 @@ ZEIT_UND_STRAENGE.md
 ## für die mehr wissen wollen
 
 Story World:  
-[Die Architektur](https://codeberg.org/gogomann/evel-rote-faeden/architektur.html)   
-[SQLite-Kernschema](https://codeberg.org/gogomann/evel-rote-faeden/datenbankschema.html)  
-[Systemübersicht](https://codeberg.org/gogomann/evel-rote-faeden/systemuebersicht.html)  
-[KI-Live-Datenfluss](https://codeberg.org/gogomann/evel-rote-faeden/event-stream.html)  
-[KI-Aufruf und Korrekturschleife](https://codeberg.org/gogomann/evel-rote-faeden/ki-aufrufschleife.html)  
+[Die Architektur](https://github.com/gogomann/-evel-rote-faeden/blob/main/architektur.html)   
+[SQLite-Kernschema](https://github.com/gogomann/-evel-rote-faeden/blob/main/datenbankschema.html)  
+[Systemübersicht](https://github.com/gogomann/-evel-rote-faeden/blob/main/systemuebersicht.html)  
+[KI-Live-Datenfluss](https://github.com/gogomann/-evel-rote-faeden/blob/main/event-stream.html)  
+[KI-Aufruf und Korrekturschleife](https://github.com/gogomann/-evel-rote-faeden/blob/main/ki-aufrufschleife.html)  
 
-[So entsteht eine Folge](https://codeberg.org/gogomann/evel-rote-faeden/prozess.html)  
-[Vom Wunsch zur Geschichte](https://codeberg.org/gogomann/evel-rote-faeden/user-journey.html)  
+[So entsteht eine Folge](https://github.com/gogomann/-evel-rote-faeden/blob/main/prozess.html)  
+[Vom Wunsch zur Geschichte](https://github.com/gogomann/-evel-rote-faeden/blob/main/user-journey.html)  

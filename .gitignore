@@ -54,3 +54,8 @@ DATENMODELL.md
 
 # Update-Zwischenstand (Downloads, Zustand) – nur lokal
 /_update/
+
+# Mitgelieferter Libra-TTS-Server: Python-Umgebung, Modell und lokale Einstellungen – nur lokal
+/zusatz/libra-tts/.venv/
+/zusatz/libra-tts/models/
+/zusatz/libra-tts/server.conf

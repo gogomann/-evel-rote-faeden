@@ -166,6 +166,8 @@ def _style(run) -> str:
                      "Inhalte, Härte und Wortwahl daran ausrichten.")
     if getattr(run, "voice", ""):
         parts.append(run.voice)
+    if getattr(run, "feedback", ""):
+        parts.append(run.feedback)
     return "\n\n".join(parts)
 
 
@@ -822,6 +824,10 @@ def _check(conn, run, plan, chapters) -> list:
     elif getattr(run, "voice", ""):
         extra += ("\n\n" + run.voice + "\nWeicht der Stil deutlich vom Erzählprofil ab, als „niedrig“ oder „mittel“ "
                   "melden (Kategorie „Stil“).")
+    if getattr(run, "feedback", ""):
+        extra += ("\n\n" + run.feedback + "\nPrüfe zusätzlich: Wiederholt die Folge, was Hörer unter „Vermeiden“ kritisiert "
+                  "haben? Melde jede deutliche Stelle als „mittel“, Beschreibung beginnt mit „Hörer:“, Korrektur = was der "
+                  "Lektor konkret ändern soll.")
     extra += _deviation_check_note(run, plan)
     if _cascade(run):
         ids = kontext.merge_ids(kontext.mentioned(conn, text + json.dumps(plan, ensure_ascii=False)),
@@ -855,8 +861,10 @@ bei „Neuling: zu viel“ kürze Welterklärungen, die die Geschichte nicht bra
 Antworte nur mit dem überarbeiteten Kapiteltext."""
 
 
-def _edit(run, chapter_text, issues, index, total, low, high) -> str:
+def _edit(run, chapter_text, issues, index, total, low, high, extra: str = "") -> str:
     fixes = "\n".join(f"- {p.get('beschreibung', '')} → {p.get('korrektur', '')}" for p in issues) or "- keine"
+    if extra:
+        fixes = extra + "\n" + fixes
     turn = getattr(run, "wendung", "")
     if turn:
         fixes += f"\nNICHT GLÄTTEN: Die geplante Wendung („{turn}“) bleibt überraschend – nicht vorwegnehmen, nicht entschärfen."
@@ -871,6 +879,139 @@ def _edit(run, chapter_text, issues, index, total, low, high) -> str:
         run.step(f"{label}: Überarbeitung zu stark gekürzt – Autorfassung bleibt", None, "warnung")
         return chapter_text
     return edited
+
+
+# ---------------------------------------------------------------- 4b. Nachbesserung (Schleife)
+
+STYLE_PASS = ("STIL-NACHBESSERUNG: Die Nachmessung zeigt, dass dieses Kapitel vom Stil-Vorbild abweicht. Schreibe es so um, "
+              "dass die gemessenen Werte zum Vorbild passen. Handlung, Figuren, Fakten, Inhalt der Dialoge und Wendungen "
+              "bleiben; es ändern sich Sprache, Satzbau, Rhythmus und Erzählweise. Höhen und Tiefen der Szene dürfen dabei "
+              "deutlicher werden – nicht glätten, nicht gleichförmig machen.")
+
+
+def _loop_fingerprint(run, profile) -> tuple:
+    """Fingerabdruck für die Schleife – nur gegen ein echtes Vorbild (Stimme oder Erzählprofil), wie beim Anhalten."""
+    voice = getattr(run, "stimme", None)
+    if voice and voice.get("fingerabdruck"):
+        return voice["fingerabdruck"], f"Stimme „{voice['name']}“"
+    reference = stimmen.reference_text(voice) if voice else (profiles.style_samples(profile, 20000) if profile else "")
+    if not reference:
+        return None, None
+    source = f"Stimme „{voice['name']}“" if voice else "Erzählprofil (eigene Texte)"
+    return stilprofil.fingerabdruck(reference, source), source
+
+
+def _style_fixes(report: dict | None, limit: int = 5) -> list:
+    """Messbare Abweichungen als Korrekturen für den Lektor – Richtung immer zum Vorbild hin."""
+    if not report or report.get("urteil") not in ("auffaellig", "stark"):
+        return []
+    rows = sorted([r for r in report.get("merkmale") or [] if r.get("urteil") != "passt"], key=lambda r: -abs(r["z"]))
+    out = []
+    for r in rows[:limit]:
+        if r.get("signatur"):
+            goal = "kleine Wörter (und, doch, noch …) so verteilen wie das Vorbild: " + r["satz"].split("–", 1)[-1].strip()
+        else:
+            spec = stilprofil._SPEC.get(r["id"])
+            goal = (spec[-1] if r["z"] > 0 else spec[-2]) if spec else r["satz"]
+        out.append({"beschreibung": f"Stil: {r['label']} – jetzt {r['folge_text']}, Vorbild {r['vorbild_text']} "
+                                    f"(normal {r['spanne_text']})",
+                    "korrektur": f"{goal[:1].upper()}{goal[1:]} – im ganzen Kapitel, Richtung {r['vorbild_text']}"})
+    odd = report.get("auffaellige_woerter") or []
+    if odd:
+        out.append({"beschreibung": "Stil: auffällig oft benutzt – " + ", ".join(f"{w['wort']} ({w['anzahl']}×)" for w in odd[:6]),
+                    "korrektur": "Diese Wörter seltener verwenden, variieren oder streichen"})
+    return out
+
+
+def _serious(issues: list) -> list:
+    return [p for p in issues if isinstance(p, dict) and p.get("schwere") in ("hoch", "mittel") and not p.get("warnung")]
+
+
+def _improve(conn, run, plan, chapters: list, issues: list, profile) -> list:
+    """Schleife nach dem Lektorat: nachmessen (Stil per Code, Prüfer erneut bei offenen wichtigen Befunden) und gezielt
+    nachbessern, bis die Kontrollen erfüllt sind oder die Runden aufgebraucht sind. Ändert chapters in place und gibt
+    die zuletzt geprüften Befunde zurück. Ein Kapitel, dessen Stilwert sich verschlechtert, behält seine vorige Fassung."""
+    rounds = int(service.setting(conn, "nachbesserung_runden") or 0)
+    rule = (f"Nach dem Lektorat wird nachgemessen: Stil gegen das Vorbild (Code), bei offenen Befunden „hoch“/„mittel“ "
+            f"prüft der Prüfer erneut. Weicht etwas ab, bessert der Lektor gezielt nach – höchstens {rounds} Runde(n). "
+            "Verschlechtert sich der Stilwert eines Kapitels, bleibt dessen vorige Fassung. Ohne Fortschritt endet die "
+            "Schleife früher (Einstellungen → Stil-Abgleich).")
+    if rounds <= 0:
+        _ev(run, "nachbesserung", "weiterleitung", "Nachbesserung ausgeschaltet", regel=rule, ausgang="info")
+        return issues
+    fp, source = _loop_fingerprint(run, profile)
+    names = _canon_names(conn)
+    total = len(chapters)
+    last = None
+    for rnd in range(rounds + 1):
+        if _serious(issues):
+            try:
+                raw = _check(conn, run, plan, chapters)
+                before = [p.get("schwere") if isinstance(p, dict) else None for p in raw]
+                issues = _soften(raw)
+                _log_findings(run, issues, before, getattr(run, "last_call_id", None))
+            except (EpisodeError, llm.LLMError) as exc:
+                run.step(f"Nachprüfung übersprungen: {exc}", None, "warnung")
+                _ev(run, "nachbesserung", "warnung", "Nachprüfung übersprungen – Schleife beendet", ausgang="warnung",
+                    ergebnis={"grund": str(exc)})
+                break
+        report = stilprofil.vergleichen("\n\n".join(chapters), fp, names) if fp else None
+        score = (report or {}).get("wert")
+        style_bad = bool(report) and report.get("urteil") in ("auffaellig", "stark")
+        open_ = _serious(issues)
+        state = (f"Stil {score}/100 ({report['urteil']})" if score is not None else "Stil ohne Vorbild nicht messbar") \
+            + f", {len(open_)} wichtige Prüfer-Befunde offen"
+        _ev(run, "nachbesserung", "bewertung", f"Runde {rnd}: {state}", regel=rule,
+            ausgang="ok" if not style_bad and not open_ else "warnung",
+            ergebnis={"runde": rnd, "stil": score, "urteil": (report or {}).get("urteil"), "massstab": source,
+                      "abweichungen": [f"{r['label']}: {r['folge_text']} statt {r['vorbild_text']}"
+                                       for r in (report or {}).get("merkmale", []) if r.get("urteil") != "passt"],
+                      "befunde_offen": [p.get("beschreibung") for p in open_]})
+        if not style_bad and not open_:
+            run.step(f"Nachmessung Runde {rnd}: Kontrollen erfüllt ({state})", 92, "ok")
+            break
+        if rnd == rounds:
+            run.step(f"Nach {rounds} Nachbesserungsrunde(n) noch offen: {state}", 92, "warnung")
+            break
+        if last and (score is None or last[0] is None or score <= last[0]) and len(open_) >= last[1]:
+            run.step(f"Nachbesserung bringt keinen Fortschritt mehr – Schleife beendet ({state})", 92, "warnung")
+            _ev(run, "nachbesserung", "entscheidung", "Kein Fortschritt gegenüber der vorigen Runde → Schleife beendet",
+                regel=rule, ausgang="warnung", ergebnis={"vorher": last[0], "jetzt": score, "befunde": len(open_)})
+            break
+        last = (score, len(open_))
+        run.step(f"Nachbesserung Runde {rnd + 1}/{rounds}: {state}", 92, "warnung")
+        edited = 0
+        for index in range(total):
+            mine = [p for p in open_ if str(p.get("kapitel")) == str(index + 1)]
+            chapter_report, style = None, []
+            if style_bad:
+                chapter_report = stilprofil.vergleichen(chapters[index], fp, names)
+                usable = chapter_report and chapter_report.get("wert") is not None
+                style = _style_fixes(chapter_report if usable else report)
+                if not usable:
+                    chapter_report = None
+            if not mine and not style:
+                continue
+            before_text = chapters[index]
+            try:
+                after = _edit(run, before_text, mine + style, index, total, 92, 92, extra=STYLE_PASS if style else "")
+            except EpisodeError as exc:
+                run.step(f"Nachbesserung Kapitel {index + 1} übersprungen: {exc}", None, "warnung")
+                continue
+            if style and not mine and chapter_report:
+                new = stilprofil.vergleichen(after, fp, names)
+                if new and new.get("wert") is not None and new["wert"] < chapter_report["wert"]:
+                    _ev(run, "nachbesserung", "eingriff",
+                        f"Kapitel {index + 1}: Stil verschlechtert ({chapter_report['wert']} → {new['wert']}) – vorige Fassung bleibt",
+                        regel=rule, ausgang="warnung")
+                    continue
+            chapters[index] = after
+            edited += 1
+            _log_edit(run, index, before_text, after, mine + style)
+        if not edited:
+            run.step("Nachbesserung: kein Kapitel ließ sich gezielt verbessern – Schleife beendet", 92, "warnung")
+            break
+    return issues
 
 
 # ---------------------------------------------------------------- 5. Archivar
@@ -954,6 +1095,7 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
         run.voice_check = run.voice
     run.genre_id = genres.resolve(conn, genre_id, thread_id)
     run.genre_rules = genres.rules_text(conn, run.genre_id)
+    run.feedback, feedback_n = feedback_block(conn, thread_id)
     run.age_rating = (age_rating or "").strip()[:40]
     run.kontext = service.setting(conn, "kontext_modus")
     story = szenarien.params(conn, thread_id, run.genre_id, abweichung, szenarien_anzahl)
@@ -977,6 +1119,7 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
                       "stimme": dict(stimmen.summary(voice), quelle=voice_src) if voice else None,
                       "erzaehlprofil": profile["name"] if profile else None,
                       "altersfreigabe": run.age_rating or None,
+                      "hoerer_bewertungen": feedback_n,
                       "ueberraschung": {"stufe": story["abweichung"], "quelle": story["quelle"], "ziel": story["ziel"]},
                       "szenarien": {"anzahl": story["szenarien"], "wahl": story["wahl"] or "automatisch",
                                     "min_kanon": story["min_kanon"]},
@@ -984,6 +1127,8 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
             regel=((f"Stimme „{voice['name']}“ kommt aus „{voice_src}“ (Folge vor Geschichte vor Welt) und gibt Planer, "
                     "Autor, Lektor den Stil und dem Prüfer den Maßstab. ") if voice else
                    "Keine Stimme gewählt – Stil aus dem Erzählprofil, falls ausgewertet. ")
+                  + (f"{feedback_n} Hörer-Bewertung(en) bisheriger Folgen gehen an Planer, Autor, Lektor und Prüfer. "
+                     if feedback_n else "")
                   + (f"Überraschungsstufe {story['abweichung']} kommt aus „{story['quelle']}“ (Folge vor Strang vor Genre "
                    f"vor Welt) und setzt das Ziel {story['ziel']:g}/10. Länge: {words} Wörter ≈ "
                    f"{round(words / WORDS_PER_MINUTE)} Minuten bei {WORDS_PER_MINUTE} Wörtern pro Minute."))
@@ -1092,6 +1237,13 @@ def produce(conn: sqlite3.Connection, wish: str = "", thread_id: int | None = No
                 _ev(run, "lektor", "warnung", f"Kapitel {index + 1}: Lektor übersprungen – Autorfassung bleibt",
                     ausgang="warnung", ergebnis={"grund": str(exc), "korrekturen_offen": len(mine)})
         run.step("Lektorat abgeschlossen", 92, "ok")
+        try:
+            issues = _improve(conn, run, plan, chapters, issues, profile)
+        except Exception as exc:  # noqa: BLE001 – Nachbesserung darf die Folge nie gefährden
+            conn.commit()
+            run.step(f"Nachbesserung abgebrochen: {exc} – bisheriger Stand bleibt", None, "warnung")
+            _ev(run, "nachbesserung", "warnung", "Nachbesserung abgebrochen – bisheriger Stand bleibt", ausgang="warnung",
+                ergebnis={"grund": str(exc)[:300]})
 
         text = "\n\n".join(chapters)
         episode_id = _save(conn, plan, thread, text, issues, run, status="fertig")
@@ -1550,12 +1702,113 @@ def _world_development(conn, plan, text) -> None:
 
 # ---------------------------------------------------------------- Lesen
 
+# ---------------------------------------------------------------- Hörer-Bewertung
+
+# Merkmal → was Planer/Autor/Lektor daraus machen sollen
+RATING_GOOD = {
+    "spannend": "Spannung aufbauen und halten",
+    "berührend": "echtes Gefühl – die Figuren spüren etwas, und der Hörer spürt es mit",
+    "lebendige Figuren": "Figuren mit eigener Stimme, eigenen Wünschen und Widersprüchen",
+    "gute Dialoge": "natürliche, charaktervolle Dialoge",
+    "überraschend": "Wendungen, die man nicht kommen sieht",
+    "Atmosphäre": "dichte Atmosphäre, Orte mit allen Sinnen",
+    "Details": "genaue, sinnliche Details statt Allgemeinplätzen",
+    "Humor": "Humor und leichte Momente",
+    "gutes Ende": "ein Ende, das trägt und nachklingt",
+}
+RATING_BAD = {
+    "hölzern": "Sätze und Dialoge klingen steif – lebendiger, mündlicher, mit Rhythmus schreiben",
+    "kein Gefühl": "Innenleben fehlt – zeigen, was die Figuren fühlen, statt nur zu berichten",
+    "immer gleich": "dasselbe Muster wie zuletzt – Aufbau, Konflikt und Denkweise der Figuren variieren",
+    "flache Höhen und Tiefen": "keine Kurve – Szenen deutlich zuspitzen, Ruhe und Eskalation im Wechsel",
+    "langatmig": "zu lang gezogen – straffen, Szenen früher beginnen und früher enden",
+    "gehetzt": "zu schnell – wichtigen Momenten Raum geben",
+    "vorhersehbar": "zu erwartbar – Erwartungen fair unterlaufen",
+    "flache Figuren": "Figuren bleiben Schablonen – Motive, Eigenheiten, innere Konflikte",
+    "zu wenig Details": "zu allgemein – konkrete Details zu Ort, Technik und Figuren",
+    "zu viel Erklärung": "zu viel Erklärtext – Welt beiläufig zeigen",
+    "Ende unbefriedigend": "das Ende trägt nicht – Bogen spürbar abschließen",
+    "Stil passt nicht": "der Stil trifft die Stimme nicht – näher am Vorbild schreiben",
+}
+FEEDBACK_LIMIT = 12
+
+
+def _tags(raw, allowed: dict) -> list:
+    items = raw if isinstance(raw, list) else []
+    return [t for t in dict.fromkeys(str(x) for x in items) if t in allowed]
+
+
+def get_rating(conn: sqlite3.Connection, episode_id: int) -> dict | None:
+    row = conn.execute("SELECT * FROM episode_ratings WHERE episode_id = ?", (episode_id,)).fetchone()
+    if row is None:
+        return None
+    return {"sterne": row["stars"], "gut": json.loads(row["good"] or "[]"), "schlecht": json.loads(row["bad"] or "[]"),
+            "kommentar": row["comment"] or "", "bewertet": row["updated_at"]}
+
+
+def rate_episode(conn: sqlite3.Connection, episode_id: int, data: dict) -> dict:
+    """Bewertung als Hörer/Leser speichern (eine je Folge, änderbar; die vorige steht im Protokoll)."""
+    if not conn.execute("SELECT 1 FROM episodes WHERE id = ?", (episode_id,)).fetchone():
+        raise LookupError("Folge nicht gefunden.")
+    try:
+        stars = int(data.get("sterne"))
+    except (TypeError, ValueError):
+        stars = 0
+    if not 1 <= stars <= 5:
+        raise service.ValidationError("Bitte 1 bis 5 Sterne vergeben.")
+    good, bad = _tags(data.get("gut"), RATING_GOOD), _tags(data.get("schlecht"), RATING_BAD)
+    comment = str(data.get("kommentar") or "").strip()[:2000]
+    old = get_rating(conn, episode_id)
+    conn.execute(
+        "INSERT INTO episode_ratings (episode_id, stars, good, bad, comment) VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(episode_id) DO UPDATE SET stars = excluded.stars, good = excluded.good, bad = excluded.bad, "
+        "comment = excluded.comment, updated_at = CURRENT_TIMESTAMP",
+        (episode_id, stars, json.dumps(good, ensure_ascii=False), json.dumps(bad, ensure_ascii=False), comment))
+    service.audit(conn, "nutzer", "bewertung", "episodes", episode_id,
+                  detail=json.dumps({"neu": {"sterne": stars, "gut": good, "schlecht": bad, "kommentar": comment},
+                                     "vorher": old}, ensure_ascii=False))
+    return get_rating(conn, episode_id)
+
+
+def feedback_block(conn: sqlite3.Connection, thread_id: int | None = None) -> tuple:
+    """Hörer-Rückmeldungen der zuletzt bewerteten Folgen (gleicher Strang zuerst) als Vorgabe für die KI.
+    Gibt (Text, Anzahl Bewertungen) zurück."""
+    rows = conn.execute(
+        "SELECT r.stars, r.good, r.bad, r.comment, e.release_nr, e.title FROM episode_ratings r "
+        "JOIN episodes e ON e.id = r.episode_id ORDER BY (e.thread_id = ?) DESC, r.updated_at DESC LIMIT ?",
+        (thread_id or -1, FEEDBACK_LIMIT)).fetchall()
+    if not rows:
+        return "", 0
+    good: dict = {}
+    bad: dict = {}
+    for r in rows:
+        for t in json.loads(r["good"] or "[]"):
+            good[t] = good.get(t, 0) + 1
+        for t in json.loads(r["bad"] or "[]"):
+            bad[t] = bad.get(t, 0) + 1
+    avg = sum(r["stars"] for r in rows) / len(rows)
+    lines = [f"HÖRER-RÜCKMELDUNGEN (Bewertungen bisheriger Folgen – daraus lernen, Inhalte nicht wiederholen): "
+             f"Ø {avg:.1f} von 5 Sternen aus {len(rows)} Folge(n)."]
+    if bad:
+        lines.append("Vermeiden (wurde kritisiert):")
+        lines += [f"- {t} ({n}×): {RATING_BAD[t]}" for t, n in sorted(bad.items(), key=lambda x: -x[1]) if t in RATING_BAD]
+    if good:
+        lines.append("Mehr davon (kam gut an):")
+        lines += [f"- {t} ({n}×): {RATING_GOOD[t]}" for t, n in sorted(good.items(), key=lambda x: -x[1]) if t in RATING_GOOD]
+    comments = [r for r in rows if r["comment"]][:5]
+    if comments:
+        lines.append("Worte des Hörers:")
+        lines += [f"- Folge {r['release_nr']} „{r['title'] or ''}“ ({r['stars']}★): {r['comment'][:300]}" for r in comments]
+    lines.append("Diese Rückmeldungen gelten innerhalb von Weltregeln, Kanon, Dramaturgie und Stimme.")
+    return "\n".join(lines), len(rows)
+
+
 def list_episodes(conn: sqlite3.Connection) -> list:
     rows = conn.execute(
         "SELECT e.id, e.release_nr, e.title, e.type, e.world_start, e.world_end, e.status, e.word_count, e.created_at, "
-        "e.summary, e.run_id, e.audio_path, e.metrics, e.form, t.title AS strang, g.name AS genre FROM episodes e "
-        "LEFT JOIN threads t ON t.id = e.thread_id LEFT JOIN genres g ON g.id = e.genre_id "
-        "ORDER BY e.release_nr DESC").fetchall()
+        "e.summary, e.run_id, e.audio_path, e.metrics, e.form, t.title AS strang, g.name AS genre, r.stars AS sterne "
+        "FROM episodes e LEFT JOIN threads t ON t.id = e.thread_id LEFT JOIN genres g ON g.id = e.genre_id "
+        "LEFT JOIN episode_ratings r ON r.episode_id = e.id ORDER BY e.release_nr DESC").fetchall()
     return [dict(r, minuten=round((r["word_count"] or 0) / WORDS_PER_MINUTE), metrics=_public_metrics(r["metrics"], False))
             for r in rows]
 
@@ -1689,6 +1942,8 @@ def get_episode(conn: sqlite3.Connection, episode_id: int, reveal: bool = False)
     out["segmente"] = parse_segments(out.get("text") or "")
     out["minuten"] = round((out.get("word_count") or 0) / WORDS_PER_MINUTE)
     out["metrics"] = _public_metrics(out.get("metrics"), reveal)
+    out["bewertung"] = get_rating(conn, episode_id)
+    out["bewertung_optionen"] = {"gut": list(RATING_GOOD), "schlecht": list(RATING_BAD)}
     if reveal:
         out["plan"] = json.loads(out["plan"]) if out.get("plan") else None
         out["check_report"] = json.loads(out["check_report"]) if out.get("check_report") else []

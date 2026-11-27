@@ -134,12 +134,22 @@ class UpdateTests(unittest.TestCase):
 
     def test_pruefen_release_und_tags(self):
         release = {"tag_name": "v9.0.0", "name": "Große Fassung", "body": "Alles neu", "published_at": "2026-11-13",
-                   "zipball_url": "https://codeberg.org/gogomann/evel-rote-faeden/archive/v9.0.0.zip", "assets": []}
-        with mock.patch.object(update, "_get_json", return_value=release):
+                   "zipball_url": "https://api.github.com/repos/gogomann/-evel-rote-faeden/zipball/refs/tags/v9.0.0", "assets": []}
+        changelog = ("# Änderungen\n\n## 9.0.0 – Groß\n> **Wichtig:** einmalig 2 GB Download\n> von Hugging Face\n- Neu\n\n"
+                     "## 8.0.0\n- Zwischen\n\n## " + __version__ + "\n> alt, nicht zeigen\n")
+        with mock.patch.object(update, "_get_json", return_value=release), \
+                mock.patch.object(update, "_fetch_changelog", return_value=changelog) as fetch:
             info = update.check(self.root)
+        fetch.assert_called_once_with("v9.0.0")
+        self.assertEqual(info["zip"], "https://github.com/gogomann/-evel-rote-faeden/archive/refs/tags/v9.0.0.zip")
         self.assertTrue(info["neuer"])
         self.assertEqual((info["neueste"], info["notizen"]), ("9.0.0", "Alles neu"))
+        self.assertEqual(info["wichtig"], [{"version": "9.0.0", "text": "**Wichtig:** einmalig 2 GB Download\nvon Hugging Face"}])
         self.assertEqual(update.status(self.root)["verfuegbar"]["neueste"], "9.0.0")
+        self.assertEqual(update.status(self.root)["verfuegbar"]["wichtig"][0]["version"], "9.0.0")
+        with mock.patch.object(update, "_get_json", return_value=release), \
+                mock.patch.object(update, "_fetch_changelog", return_value=None):
+            self.assertEqual(update.check(self.root)["wichtig"], [])         # Datei auf GitHub fehlt: kein Abbruch
 
         def no_release(url, timeout=15):
             return None if "releases" in url else [{"name": "v0.0.1"}, {"name": "latest"}, {"name": __version__}]
@@ -149,10 +159,12 @@ class UpdateTests(unittest.TestCase):
         self.assertIsNone(update.status(self.root)["verfuegbar"])
         with self.assertRaises(update.UpdateError):
             update.download("https://example.com/x.zip", self.tmp / "x.zip")
+        with self.assertRaises(update.UpdateError):   # nur das eigene GitHub-Repository
+            update.download("https://github.com/fremd/repo/archive/refs/tags/v9.zip", self.tmp / "x.zip")
 
     def test_hinweis_nach_update_und_migrationen(self):
         (self.root / "AENDERUNGEN.md").write_text(
-            "# Änderungen\n\n## 9.0.0\n- Zukunft\n\n## " + __version__ + " – jetzt\n- Update-Knopf\n\n## 0.0.5\n- Fix\n\n## 0.0.1\n- Alt\n",
+            "# Änderungen\n\n## 9.0.0\n- Zukunft\n\n## " + __version__ + " – jetzt\n- Update-Knopf\n\n## 0.0.5\n> Großer Download nötig\n- Fix\n\n## 0.0.1\n- Alt\n",
             encoding="utf-8")
         first = update.status(self.root)  # erster Start: nur merken, kein Banner
         self.assertIsNone(first["neu"])
@@ -163,6 +175,8 @@ class UpdateTests(unittest.TestCase):
             st = update.status(self.root)
             self.assertEqual([a["version"] for a in st["neu"]["abschnitte"]], [update.version_text(__version__), "0.0.5"])
             self.assertEqual(st["migrationen"][0]["von"], 14)
+            self.assertEqual(st["neu"]["wichtig"], [{"version": "0.0.5", "text": "Großer Download nötig"}])
+            self.assertNotIn("Großer", st["neu"]["abschnitte"][1]["text"])
             update.acknowledge(self.root)
             st = update.status(self.root)
             self.assertIsNone(st["neu"])

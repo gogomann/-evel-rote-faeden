@@ -6,7 +6,7 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const STATUS_LABEL = { neu: "neu", in_arbeit: "KI arbeitet", vorschlag: "Vorschlag bereit", eingearbeitet: "eingearbeitet",
   verworfen: "verworfen", fehler: "Fehler", offen: "offen", uebernommen: "übernommen", laeuft: "läuft", fertig: "fertig",
-  abgebrochen: "abgebrochen" };
+  abgebrochen: "abgebrochen", beantwortet: "beantwortet" };
 const chip = (s) => `<span class="chip st-${esc(s)}">${esc(STATUS_LABEL[s] || s)}</span>`;
 const who = (c) => `<span class="chip ${esc(c)}">${c === "ki" ? "KI" : c === "nutzer" ? "du" : esc(c)}</span>`;
 
@@ -287,16 +287,28 @@ function opHtml(o) {
 VIEWS.vorschlaege = async (el) => {
   const { vorschlaege } = await api(W("/proposals"));
   const open = vorschlaege.filter((v) => v.status === "offen"), done = vorschlaege.filter((v) => v.status !== "offen");
-  const card = (v) => `<div class="card"><div class="row spread"><div class="row">${chip(v.status)}
-      <span class="muted small">${esc(v.created_at)} · ${esc(v.model || "")}</span></div>
+  const answered = (v) => !!(v.result && v.result.beantwortet);
+  const ABC = ["A", "B", "C"];
+  const fragen = (v) => v.status !== "offen" || !v.rueckfragen.length ? "" : `<div class="card" style="border-color:var(--warn)" data-rf="${v.id}">
+    <b>Rückfragen der KI</b>${v.rueckfragen.map((q, n) => `<div class="stack" style="margin-top:10px">
+      <div>${n + 1}. ${esc(q.frage)}</div>
+      ${q.optionen.map((o, k) => `<label class="row" style="margin:0"><input type="radio" style="width:auto" name="rf-${v.id}-${n}" value="${ABC[k]}"> <b>${ABC[k]}</b> ${esc(o)}</label>`).join("")}
+      <label class="row" style="margin:0"><input type="radio" style="width:auto" name="rf-${v.id}-${n}" value="frei" ${q.optionen.length ? "" : "checked"}> <b>Freie Antwort</b></label>
+      <textarea data-rf-text="${n}" placeholder="Freie Antwort oder Ergänzung zur gewählten Option – z. B. was die KI nicht wissen konnte"></textarea></div>`).join("")}
+    <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="ki" data-ans="${v.id}">Antworten an die KI → neuer Vorschlag</button></div></div>`;
+  const antworten = (v) => !answered(v) ? "" : `<div class="card" style="border-color:var(--ki)"><b>Deine Antworten auf die Rückfragen</b><ol>${v.result.antworten.map((a) => `<li>${esc(a.frage)}<br>
+      <span class="muted">→ ${a.wahl === "frei" ? `frei: ${esc(a.text)}` : `${esc(a.wahl)}: ${esc(a.option)}${a.text ? ` – ${esc(a.text)}` : ""}`}</span></li>`).join("")}</ol>
+    <div class="muted small">${v.result.neuer_vorschlag ? `→ überarbeitet als Vorschlag #${esc(v.result.neuer_vorschlag)}` : "KI überarbeitet den Vorschlag …"}</div></div>`;
+  const card = (v) => `<div class="card"><div class="row spread"><div class="row">${chip(answered(v) ? "beantwortet" : v.status)}
+      <span class="muted small">#${esc(v.id)} · ${esc(v.created_at)} · ${esc(v.model || "")}</span></div>
       ${v.status === "offen" ? `<div class="row"><button class="ghost" data-rej="${v.id}">Verwerfen</button>
         <button class="primary" data-acc="${v.id}" ${v.fehler.length ? "disabled" : ""}>Übernehmen</button></div>` : ""}</div>
     <div class="summary">${esc(v.summary)}</div>
     ${v.fehler.length ? `<div class="err">${v.fehler.map(esc).join("<br>")}</div>` : ""}
-    ${v.rueckfragen.length ? `<div class="card" style="border-color:var(--warn)"><b>Rückfragen der KI</b><ul>${v.rueckfragen.map((q) => `<li>${esc(q)}</li>`).join("")}</ul></div>` : ""}
+    ${fragen(v)}${antworten(v)}
     <details ${v.status === "offen" ? "open" : ""}><summary class="muted">${v.operationen.length} sichtbare Änderung(en)${v.verborgen ? ` · <span class="locked">🔒 ${v.verborgen} verborgen</span>` : ""}</summary>
       ${v.operationen.map(opHtml).join("")}</details>
-    ${v.result ? `<div class="muted small">Ergebnis: ${v.result.angelegt} angelegt, ${v.result.ergaenzt} ergänzt${v.result.uebersprungen ? `, ${v.result.uebersprungen} vorhandene Werte geschützt` : ""}</div>` : ""}
+    ${v.result && !answered(v) ? `<div class="muted small">Ergebnis: ${v.result.angelegt} angelegt, ${v.result.ergaenzt} ergänzt${v.result.uebersprungen ? `, ${v.result.uebersprungen} vorhandene Werte geschützt` : ""}</div>` : ""}
     <details><summary class="muted small">Auftrag an die KI</summary><pre class="code">${esc(v.task)}</pre></details></div>`;
   el.innerHTML = `<h2>KI-Vorschläge</h2>
     <p class="muted">Die KI legt nur Neues an oder füllt leere Felder – deine Einträge werden nie überschrieben. Verborgene Elemente (Geheimnisse) werden mit übernommen, ohne dass du sie siehst.
@@ -310,6 +322,22 @@ VIEWS.vorschlaege = async (el) => {
   })));
   el.querySelectorAll("[data-rej]").forEach((b) => (b.onclick = () => guard(async () => {
     await api(W(`/proposals/${b.dataset.rej}/verwerfen`), { method: "POST", body: {} }); render();
+  })));
+  el.querySelectorAll("[data-rf-text]").forEach((t) => (t.oninput = () => {
+    const box = t.closest(".stack"), free = box.querySelector('input[value="frei"]');
+    if (t.value.trim() && !box.querySelector("input[type=radio]:checked")) free.checked = true;
+  }));
+  el.querySelectorAll("[data-ans]").forEach((b) => (b.onclick = () => guard(async () => {
+    const v = vorschlaege.find((x) => String(x.id) === b.dataset.ans), box = el.querySelector(`[data-rf="${v.id}"]`);
+    const antworten = v.rueckfragen.map((q, n) => ({
+      wahl: (box.querySelector(`input[name="rf-${v.id}-${n}"]:checked`) || {}).value || "",
+      text: box.querySelector(`[data-rf-text="${n}"]`).value.trim() }));
+    const leer = antworten.findIndex((a) => !a.wahl || (a.wahl === "frei" && !a.text));
+    if (leer >= 0) throw new Error(`Rückfrage ${leer + 1}: Wähle A, B, C oder schreib eine freie Antwort.`);
+    b.disabled = true;
+    try { await api(W(`/proposals/${v.id}/beantworten`), { method: "POST", body: { antworten } }); }
+    catch (e) { b.disabled = false; throw e; }
+    toast("Antworten an die KI übergeben – sie überarbeitet den Vorschlag.", "ok"); pollJobs(); render();
   })));
 };
 
@@ -327,7 +355,7 @@ VIEWS.folgen = async (el) => {
     ${folgen.length ? `<div class="stack">${folgen.map((f) => `<div class="card click" data-ep="${f.id}">
       <div class="row spread"><div class="row"><span class="stat" style="font-size:20px">${f.release_nr}</span><b>${esc(f.title || "Ohne Titel")}</b>
         <span class="chip">${esc(TYP_LABEL[f.type] || f.type)}</span>${f.form === "geschichte" ? '<span class="chip st-fertig">eigenständige Geschichte</span>' : ""}${f.status === "entwurf" ? '<span class="chip st-offen">Entwurf</span>' : ""}
-        ${f.status === "freigabe" ? '<span class="chip st-fehler">wartet auf Freigabe</span>' : ""}${warnChip(f.metrics)}${f.audio_path ? '<span class="chip st-fertig">🎧</span>' : ""}</div>
+        ${f.status === "freigabe" ? '<span class="chip st-fehler">wartet auf Freigabe</span>' : ""}${f.sterne ? `<span class="chip">${"★".repeat(f.sterne)}</span>` : ""}${warnChip(f.metrics)}${f.audio_path ? '<span class="chip st-fertig">🎧</span>' : ""}</div>
         <span class="small muted">${f.minuten} min · ${f.word_count || 0} Wörter</span></div>
       <div class="small muted" style="margin-top:4px">${f.genre ? `Genre: ${esc(f.genre)} · ` : ""}${f.age_rating ? `${esc(f.age_rating)} · ` : ""}Strang: ${esc(f.strang || "—")} · Weltzeit ${esc(f.world_start)}–${esc(f.world_end)} · erzeugt ${esc(f.created_at || "")}</div></div>`).join("")}</div>`
       : '<div class="card empty">Noch keine Folgen. „Neue Folge – Geschichte wählen“ – die KI legt fehlende Figuren und Stränge dabei selbst an.</div>'}`;
@@ -557,6 +585,7 @@ async function episodeReader(el, id) {
     <div class="card reader" id="rd-text">${f.segmente.map((s, i) => s.typ === "narrator"
       ? `<p class="seg" data-i="${i}">${esc(s.text)}</p>`
       : `<p class="seg say" data-i="${i}"><span class="who">${esc(s.sprecher)}</span>${esc(s.text)}</p>`).join("")}</div>
+    <div id="rd-rating"></div>
     ${f.summary ? `<details class="card"><summary>Zusammenfassung (für später)</summary><p>${esc(f.summary)}</p></details>` : ""}
     ${S.reveal && f.plan ? `<details class="card"><summary>Backstage: Plan und Prüfbericht</summary>
       <pre class="live">${esc(JSON.stringify({ plan: f.plan, pruefung: f.check_report }, null, 1))}</pre></details>` : ""}
@@ -576,6 +605,36 @@ async function episodeReader(el, id) {
   el.querySelectorAll(".seg").forEach((p) => (p.ondblclick = () => startReading(f.segmente, Number($("#rd-rate").value), Number(p.dataset.i))));
   guard(() => ttsCard(id));
   styleCard($("#rd-style"), id, f.metrics && f.metrics.stilbericht);
+  ratingCard($("#rd-rating"), id, f.bewertung, f.bewertung_optionen);
+}
+
+// Bewertung als Hörer/Leser: fließt in Planer, Autor, Lektor und Prüfer der nächsten Folgen ein.
+function ratingCard(box, id, r, opts) {
+  const cur = { sterne: r ? r.sterne : 0, gut: new Set(r ? r.gut : []), schlecht: new Set(r ? r.schlecht : []), kommentar: r ? r.kommentar : "" };
+  const keep = () => { const t = $("#rt-text", box); if (t) cur.kommentar = t.value; };
+  const tags = (group, cls) => opts[group].map((t) => `<button type="button" class="ghost small rt-tag ${cur[group].has(t) ? cls : ""}" data-g="${group}" data-t="${esc(t)}">${esc(t)}</button>`).join(" ");
+  const draw = () => {
+    box.innerHTML = `<div class="card stack"><div class="row spread"><h3 style="margin:0">Wie war die Folge?</h3>
+        ${r ? `<span class="small muted">bewertet ${esc(r.bewertet)}</span>` : ""}</div>
+      <div class="row" id="rt-stars">${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="ghost" data-s="${n}" style="font-size:20px">${n <= cur.sterne ? "★" : "☆"}</button>`).join("")}</div>
+      <div class="small"><b>Gut:</b> ${tags("gut", "rt-on-good")}</div>
+      <div class="small"><b>Schwach:</b> ${tags("schlecht", "rt-on-bad")}</div>
+      <div class="field"><label>Was dir aufgefallen ist (optional)</label><textarea id="rt-text" placeholder="z. B. Iva wirkte im Streit zu ruhig; der Anfang hat mich abgeholt">${esc(cur.kommentar)}</textarea></div>
+      <div class="row spread"><span class="small muted">Deine Bewertungen gehen als Hörer-Rückmeldung an Planer, Autor, Lektor und Prüfer der nächsten Folgen.</span>
+        <button class="primary" id="rt-save">Bewertung speichern</button></div></div>`;
+    box.querySelectorAll("[data-s]").forEach((b) => (b.onclick = () => { cur.sterne = Number(b.dataset.s); keep(); draw(); }));
+    box.querySelectorAll(".rt-tag").forEach((b) => (b.onclick = () => {
+      const set = cur[b.dataset.g]; set.has(b.dataset.t) ? set.delete(b.dataset.t) : set.add(b.dataset.t); keep(); draw();
+    }));
+    $("#rt-save", box).onclick = () => guard(async () => {
+      if (!cur.sterne) throw new Error("Bitte 1 bis 5 Sterne vergeben.");
+      r = await api(W(`/episodes/${id}/bewertung`), { method: "POST", body: { sterne: cur.sterne, gut: [...cur.gut],
+        schlecht: [...cur.schlecht], kommentar: $("#rt-text", box).value } });
+      cur.kommentar = r.kommentar;
+      toast("Bewertung gespeichert – fließt in die nächsten Folgen ein.", "ok"); draw();
+    });
+  };
+  draw();
 }
 
 const STYLE_WORD = { passt: "passt", auffaellig: "auffällig", stark: "deutlich anders", zu_kurz: "zu kurz", unklar: "unklar" };
@@ -2396,11 +2455,16 @@ SUB.welt = async (el) => {
       <div class="field"><label>Wenn eine Folge deutlich vom Fingerabdruck der Stimme abweicht …</label><div class="row" style="flex-wrap:nowrap">
         <select id="s-stil"><option value="stark">… wartet sie auf meine Freigabe</option>
           <option value="nie" ${o.meta.einstellungen.stil_anhalten === "nie" ? "selected" : ""}>… nur anzeigen, nicht anhalten</option></select>
-        <button class="ghost" id="s-stil-save">Speichern</button></div></div>
+        </div></div>
+      <div class="field"><label>Nachbesserung nach dem Lektorat (Runden: nachmessen → gezielt überarbeiten)</label>
+        <select id="s-nach">${[0, 1, 2, 3].map((n) => `<option value="${n}" ${String(n) === String(o.meta.einstellungen.nachbesserung_runden ?? "2") ? "selected" : ""}>${n === 0 ? "aus" : n + " Runde" + (n > 1 ? "n" : "")}</option>`).join("")}</select></div>
+      <div class="row"><button class="ghost" id="s-stil-save">Speichern</button></div>
       <p class="small muted">Jede Folge wird per Code mit dem Stil-Fingerabdruck ihrer Stimme verglichen (Satzbau, Rhythmus, Dialog, Erzählzeit,
-        Perspektive, Satzzeichen, kleine Wörter). Das Ergebnis steht an der Folge unter „Stil-Abgleich“ und im KI-Lauf.</p></div>`;
+        Perspektive, Satzzeichen, kleine Wörter). Das Ergebnis steht an der Folge unter „Stil-Abgleich“ und im KI-Lauf.
+        Nach dem Lektorat wird nachgemessen: Weicht der Stil ab oder sind wichtige Prüfer-Befunde offen, bessert der Lektor gezielt die
+        betroffenen Kapitel nach und es wird erneut gemessen – bis alles passt oder die Runden aufgebraucht sind (je Runde weitere KI-Aufrufe).</p></div>`;
   $("#s-stil-save").onclick = () => guard(async () => {
-    await api(W("/settings"), { method: "POST", body: { stil_anhalten: $("#s-stil").value } }); toast("Gespeichert.", "ok");
+    await api(W("/settings"), { method: "POST", body: { stil_anhalten: $("#s-stil").value, nachbesserung_runden: $("#s-nach").value } }); toast("Gespeichert.", "ok");
   });
   api(W("/rows/genres")).then((g) => {
     $("#s-genre").innerHTML += g.rows.map((x) => `<option value="${x.id}" ${String(x.id) === o.meta.einstellungen.standard_genre ? "selected" : ""}>${esc(x.name)}</option>`).join("");
@@ -2576,6 +2640,14 @@ SUB.sicherung = async (el) => {
 
 const UPD = { info: null, report: null };
 
+// Besonders wichtige Hinweise einer Version (Zeilen mit „> “ in AENDERUNGEN.md), z. B. ein großer Zusatz-Download – groß zeigen
+function updateWichtig(list) {
+  if (!list || !list.length) return "";
+  const md = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\n/g, "<br>");
+  return list.map((w) => `<div class="update-wichtig"><div class="update-wichtig-kopf">⚠️ Wichtig – Version ${esc(w.version)}</div>
+    <div>${md(w.text)}</div></div>`).join("");
+}
+
 SUB.update = async (el) => {
   const st = await api("/api/update/status");
   const info = UPD.info, rep = UPD.report;
@@ -2591,6 +2663,7 @@ SUB.update = async (el) => {
   } else if (info && info.neuer) {
     result = `<div class="card stack"><div class="row spread"><b>Neue Version ${esc(info.neueste)}</b>
       <span class="small muted">${esc((info.veroeffentlicht || "").slice(0, 10))}</span></div>
+      ${updateWichtig(info.wichtig)}
       ${notes(info.notizen) || '<div class="small muted">Keine Beschreibung zum Release.</div>'}
       ${st.entwickler ? '<div class="note small">Dieser Ordner ist ein Git-Entwicklerstand – hier bitte <code>git pull</code> verwenden.</div>'
         : `<div class="row"><button class="primary" id="u-install" ${st.jobs_laufen ? "disabled" : ""}>Jetzt installieren</button>
@@ -2601,7 +2674,7 @@ SUB.update = async (el) => {
   el.innerHTML = `<h2>Update</h2><div class="card stack">
     <div class="row spread"><span>Installierte Version <b>${esc(st.version)}</b></span>
       <button class="ghost" id="u-check">Nach Updates suchen</button></div>
-    <p class="small muted">Lädt neue Versionen von Codeberg. Ersetzt werden nur Programmdateien – Welten, Einstellungen, Profile, Stimmen,
+    <p class="small muted">Lädt neue Versionen von GitHub. Ersetzt werden nur Programmdateien – Welten, Einstellungen, Profile, Stimmen,
       Texte und Exporte bleiben unberührt. Alte Programmdateien kommen nach <code>_old/</code>, nichts wird gelöscht.</p>
     <label class="small row" style="gap:6px;text-transform:none;letter-spacing:0;font-weight:400"><input type="checkbox" id="u-auto" style="width:auto" ${st.automatisch ? "checked" : ""}>
       Beim Start automatisch nachsehen (höchstens einmal am Tag)</label></div>
@@ -2655,6 +2728,7 @@ async function showUpdateBanner() {
   if (st.neu) {
     const secs = st.neu.abschnitte.map((a) => `<div style="margin-top:6px"><b>${esc(a.titel)}</b><div class="update-notes">${esc(a.text)}</div></div>`).join("");
     parts.push(`<div><b>Update installiert: ${esc(st.neu.von)} → ${esc(st.neu.nach)}</b>
+      ${updateWichtig(st.neu.wichtig)}
       ${secs || (st.neu.notizen ? `<div class="update-notes">${esc(st.neu.notizen)}</div>` : "")}
       ${st.neu.sicherung ? `<div class="small muted">Alte Programmdateien: <code>${esc(st.neu.sicherung)}</code></div>` : ""}</div>`);
   }
@@ -2668,7 +2742,8 @@ async function showUpdateBanner() {
     $("#ub-ok").onclick = () => guard(async () => { await api("/api/update/gesehen", { method: "POST", body: {} }); box.classList.add("hidden"); box.innerHTML = ""; });
   } else if (st.verfuegbar && !sessionStorage.getItem("sw-upd-hinweis")) {
     try { sessionStorage.setItem("sw-upd-hinweis", "1"); } catch (e) {}
-    box.innerHTML = `<div class="banner"><span>Neue Version <b>${esc(st.verfuegbar.neueste)}</b> verfügbar.</span>
+    box.innerHTML = `<div class="banner"><span>Neue Version <b>${esc(st.verfuegbar.neueste)}</b> verfügbar.${(st.verfuegbar.wichtig || []).length
+      ? " <b>⚠️ Mit wichtigem Hinweis – bitte vor dem Installieren lesen.</b>" : ""}</span>
       <span class="row"><button class="primary" id="ub-go">Ansehen</button><button class="ghost" id="ub-later">Später</button></span></div>`;
     box.classList.remove("hidden");
     $("#ub-go").onclick = () => { box.classList.add("hidden"); UPD.info = { ...st.verfuegbar, neuer: true }; openSettings("update"); };
@@ -2771,12 +2846,31 @@ function ttsGuide(p) {
 }
 const readTtsForm = (root) => Object.fromEntries([...root.querySelectorAll("[data-f]")].map((i) => [i.dataset.f, i.value]).filter(([k, v]) => k !== "api_key" || v));
 
+function libraCard(lb) {
+  if (!lb || !lb.vorhanden) return "";
+  const state = !lb.eingerichtet ? "nicht eingerichtet" : lb.archiviert ? "archiviert (startet nicht)" : lb.bereit ? `läuft · ${esc(lb.adresse)}`
+    : lb.laeuft ? "startet – Modell wird geladen …" : "eingerichtet, läuft nicht";
+  return `<div class="card stack" id="libra-card"><div class="row spread"><div><b>🎭 Libra-TTS (mitgeliefert)</b>
+      <span class="muted small">8 Stimmen, Sprechstile und Geräusche – offline</span></div><span class="chip">${state}</span></div>
+    <div class="small muted">${lb.eingerichtet
+      ? "Startet automatisch mit Story World und beendet sich mit ihr. Die Hörspiel-Regie nutzt Stile (warm, sad, whispering …) und Geräusche (&lt;sigh&gt;, &lt;laugh&gt; …)."
+      : `<b>Zusatzfunktion (optional).</b> Einmalig einrichten – dafür kommt ein größerer Download dazu:
+         <b>${esc(lb.download ? lb.download.groesse : "ca. 1–2 GB")}</b>${lb.download ? ` · Quelle: ${esc(lb.download.quellen)}` : ""}.
+         Das passiert nur einmal, Updates laden es nicht erneut. Braucht Python 3.10 oder neuer.
+         Danach ist Libra automatisch eingebunden und startet mit Story World.`}
+      ${lb.nachinstallation ? " Ein Update braucht neue Pakete – „Einrichten“ zieht sie nach." : ""}</div>
+    <div class="row">${!lb.eingerichtet || lb.nachinstallation ? '<button class="ki" id="libra-setup">Einrichten</button>' : ""}
+      ${lb.eingerichtet && !lb.laeuft && !lb.archiviert ? '<button class="ghost" id="libra-start">Starten</button>' : ""}
+      ${lb.laeuft && lb.adresse ? `<a class="small" href="${esc(lb.adresse)}/" target="_blank" rel="noopener">Libra-Oberfläche öffnen</a>` : ""}</div></div>`;
+}
+
 SUB.tts = async (el) => {
-  const t = await api("/api/tts");
+  const [t, lb] = await Promise.all([api("/api/tts"), api("/api/libra").catch(() => null)]);
   const presetOf = (s) => t.presets.find((p) => p.id === (s.preset || "custom")) || {};
   const cards = t.server.map((s) => `<div class="card stack" data-srv="${s.id}">
     <div class="row spread"><div><b>${esc(s.name)}</b> <span class="muted small">${esc(s.preset_name && s.preset !== "custom" ? s.preset_name : s.typ_name)}</span>
-      ${s.cloud ? '<span class="chip" title="Der Text geht zum Vertonen an diesen Anbieter">☁ Cloud</span>' : ""}</div>${statusChip(s.status)}</div>
+      ${s.cloud ? '<span class="chip" title="Der Text geht zum Vertonen an diesen Anbieter">☁ Cloud</span>' : ""}
+      ${s.regie ? `<span class="chip" title="Stile: ${esc((s.regie.stile || []).join(", "))} · Geräusche: ${esc((s.regie.tags || []).join(" "))}">🎭 Stile &amp; Geräusche</span>` : ""}</div>${statusChip(s.status)}</div>
     <div class="small muted">${esc(s.base_url)}${s.modell ? ` · Modell ${esc(s.modell)}` : ""}${s.sprache || s.sprache_erkannt ? ` · Sprache ${esc(s.sprache || s.sprache_erkannt)}${s.sprache ? "" : " (vom Server)"}` : ""} · max. ${esc(s.max_zeichen)} Zeichen je Anfrage${s.geprueft_am ? ` · geprüft ${esc(s.geprueft_am)}` : ""}</div>
     ${s.last_error ? `<div class="err small">${esc(s.last_error)}</div>` : ""}
     <div class="row"><button class="ki" data-tverify="${s.id}">Prüfen &amp; Stimmen laden</button><button class="ghost" data-tedit="${s.id}">Bearbeiten</button>
@@ -2800,12 +2894,23 @@ SUB.tts = async (el) => {
     <p class="small muted">Eigene Sprach-Server für die Vertonung. Stimmen werden vom Server geladen; Besetzung und Modus (Hörspiel/Hörbuch)
       wählst du je Folge. Text wird in Stücke bis „max. Zeichen“ zerlegt und zu einer WAV-Datei zusammengefügt.
       Das Vorlesen im Browser und die macOS-Vertonung bleiben unverändert.</p>
+    ${libraCard(lb)}
     <div class="provider-grid">${cards || '<div class="muted small">Noch kein TTS-Server eingerichtet.</div>'}</div>
     ${newCard}
     ${t.archiv.length ? `<details><summary class="muted">Archiv (${t.archiv.length}) – entfernte Server, wiederherstellbar</summary>
       ${t.archiv.map((s) => `<div class="row spread card" style="margin-top:8px"><span>${esc(s.name)} <span class="muted small">${esc(s.base_url)} · archiviert ${esc(s.archiviert_am || "")}</span></span>
         <button class="ghost" data-trestore="${s.id}">Wiederherstellen</button></div>`).join("")}</details>` : ""}`;
   el.querySelectorAll("[data-tpreset]").forEach((b) => (b.onclick = () => { S.ttsPreset = b.dataset.tpreset; render(); }));
+  if ($("#libra-setup")) $("#libra-setup").onclick = (e) => guard(async () => {
+    e.target.disabled = true;
+    await api("/api/libra/einrichten", { method: "POST", body: {} });
+    toast("Libra-TTS wird eingerichtet (1–2 GB, einige Minuten) – Fortschritt im Story-World-Fenster."); pollJobs();
+  });
+  if ($("#libra-start")) $("#libra-start").onclick = (e) => guard(async () => {
+    e.target.disabled = true;
+    await api("/api/libra/starten", { method: "POST", body: {} });
+    toast("Libra-TTS startet – das Laden des Modells dauert etwas."); pollJobs();
+  });
   if ($("#t-back")) $("#t-back").onclick = () => { S.ttsPreset = null; render(); };
   if ($("#t-add")) $("#t-add").onclick = () => guard(async () => {
     const r = await api("/api/tts/server", { method: "POST", body: readTtsForm($("#t-new")) });
@@ -2856,6 +2961,211 @@ function voiceOptions(t, selected, emptyLabel) {
   return `${emptyLabel !== null ? `<option value="">${esc(emptyLabel)}</option>` : ""}${groups}`;
 }
 
+// Deutsche Erklärungen für Geräusche, Sprechstile und Tempi (Mouse-over im Regie-Editor)
+const REGIE_DE = {
+  "<laugh>": "Lachen", "<chuckle>": "Leises Lachen, Glucksen", "<giggle>": "Kichern", "<snicker>": "Hämisches Kichern",
+  "<sigh>": "Seufzen", "<gasp>": "Nach Luft schnappen (Schreck, Überraschung)", "<breath>": "Hörbares Einatmen",
+  "<heavy breath>": "Schweres Atmen (nach Rennen, bei Angst)", "<exhales>": "Hörbares Ausatmen",
+  "<phew>": "„Puh“ – erleichtertes Ausatmen", "<short pause>": "Kurze Pause", "<long pause>": "Lange Pause",
+  "<cough>": "Husten", "<throat-clearing>": "Räuspern", "<sneeze>": "Niesen", "<yawn>": "Gähnen",
+  "<sob>": "Schluchzen", "<cry>": "Weinen", "<whimper>": "Wimmern", "<groan>": "Stöhnen",
+  "<tsk>": "Missbilligendes Zungenschnalzen („tss“)", "<shout>": "Rufen, Schreien",
+  warm: "Herzlich, freundlich", cheerful: "Fröhlich, gut gelaunt", excited: "Aufgeregt, begeistert", sad: "Traurig",
+  frightened: "Ängstlich, verängstigt", calm: "Ruhig, gelassen", serious: "Ernst", wry: "Trocken-ironisch",
+  tender: "Zärtlich, sanft", whispering: "Flüsternd", dramatic: "Dramatisch, spannungsvoll",
+  documentary: "Sachlich, dokumentarisch (Zahlen, Erklärungen)", neutral: "Ohne Stil – normale Sprechweise",
+  slow: "Langsamer sprechen", fast: "Schneller sprechen",
+};
+const regieDe = (x) => REGIE_DE[x] || REGIE_DE[String(x).toLowerCase()] || "";
+
+// Hörspiel-Regie: Sprechstil, Tempo und Geräusch-Tags je Absatz (nur für Server, die das können, z. B. Libra-TTS)
+function regieRow(rg) {
+  if (!rg || !rg.moeglich) return "";
+  const info = rg.vorhanden
+    ? `${rg.bearbeitet ? "von Hand angepasst" : `KI (${esc(rg.modell || "")})`} · ${rg.stile} Absätze mit Stil, ${rg.wechsel || 0} Stilwechsel, ${rg.geraeusche} Geräusche (davon ${rg.atmer || 0} Atmer) · ${esc(rg.erstellt || "")}`
+    : rg.stufe === "aus" ? "neutral vorlesen" : rg.veraltet ? "Text hat sich geändert – entsteht beim Vertonen neu" : "entsteht beim Vertonen";
+  return `<div class="stack" style="gap:6px"><div class="row">
+      <label class="small muted" style="margin:0" title="Die KI legt je Absatz Sprechstil, Tempo und Geräusche fest. Der Folgentext bleibt unverändert.">🎭 Regie</label>
+      <select id="tts-regie">${Object.entries(rg.stufen).map(([k, l]) => `<option value="${k}" ${k === rg.stufe ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+      <span class="small muted">${info}</span>
+      ${rg.stufe !== "aus" ? `<button class="ghost" id="tts-regie-neu">${rg.vorhanden ? "Neu erstellen" : "Jetzt erstellen"}</button>` : ""}</div>
+    <details class="expert" id="tts-regie-details"><summary class="muted small">Regie ansehen &amp; ändern</summary>
+      <div id="tts-regie-edit" class="stack small">lädt …</div></details></div>`;
+}
+
+async function regieEditor(id) {
+  const box = $("#tts-regie-edit");
+  if (!box) return;
+  const r = await api(W(`/episodes/${id}/tts/regie`));
+  const opt = (list, sel, empty) => `<option value="" title="${esc(empty === "normal" ? "Tempo des Stils" : regieDe("neutral"))}">${empty}</option>`
+    + list.map((x) => `<option ${x === sel ? "selected" : ""} title="${esc(regieDe(x))}">${esc(x)}</option>`).join("");
+  const chip = (attr, v, label, title) => `<button class="ghost small" ${attr}="${esc(v)}" title="${esc(title)}" style="padding:2px 6px">${esc(label)}</button>`;
+  box.innerHTML = `<div class="regie-tags">
+      <div class="row" style="flex-wrap:wrap;gap:4px"><span class="small muted" style="min-width:70px">Geräusche</span>
+        ${r.tags.map((t) => chip("data-rins", t, t, `${regieDe(t) || t} – Klick fügt es an der Cursorposition ein`)).join("")}</div>
+      <div class="row" style="flex-wrap:wrap;gap:4px"><span class="small muted" style="min-width:70px">Stilwechsel</span>
+        ${[...r.stile, "neutral"].map((st) => chip("data-rins", `[${st}]`, `[${st}]`, `${regieDe(st) || st} – ab hier bis zum nächsten Wechsel bzw. Absatzende so sprechen`)).join("")}</div>
+      <div class="row" style="gap:8px;align-items:center">
+        <span id="regie-filter"></span>
+        <button class="ki" id="regie-retake" disabled title="Für die angehakten Absätze je einen neuen Take aufnehmen – sonst wird nichts neu gesprochen">Ausgewählte neu sprechen</button>
+        <button class="primary" id="regie-save" disabled title="Alle geänderten Absätze speichern">💾 Speichern</button>
+        <span class="small muted">Speichert auch von selbst (beim Verlassen der Zelle und kurz nach dem Tippen). <b id="regie-status"></b></span></div></div>
+    <div class="regie-scroll" data-filterziel="#regie-filter"><table class="small"><thead><tr><th></th><th>#</th><th>Sprecher</th><th>Stil am Anfang</th><th title="normal = Tempo des Stils; slow/fast nur, wenn du es hier setzt">Tempo</th><th>Sprechtext</th><th>Ton</th><th></th></tr></thead><tbody>
+      ${r.segmente.map((g) => `<tr data-rnr="${g.nr}"><td><input type="checkbox" data-rsel title="Für „neu vertonen“ auswählen"></td>
+        <td class="muted">${g.nr}</td><td>${esc(g.sprecher)}</td>
+        <td><select data-rf="stil">${opt(r.stile, g.stil, "neutral")}</select></td>
+        <td><select data-rf="tempo">${opt(r.tempi, g.tempo, "normal")}</select></td>
+        <td style="width:52%"><textarea data-rf="text" rows="3" data-orig="${esc(g.text)}">${esc(g.sprechtext)}</textarea>
+          <div class="small muted" data-rinfo ${g.umformuliert ? "" : "hidden"}>✎ Für das Hörspiel umformuliert – der Folgentext bleibt im Original.
+            <button class="ghost small" data-rorig style="padding:1px 6px" title="Originaltext wieder einsetzen (Geräusche und Stilwechsel gehen dabei verloren)">↺ Original</button></div>
+          <div class="small err" data-rerr></div></td>
+        <td class="regie-ton"><div class="row" style="gap:4px;flex-wrap:nowrap">
+          <button class="ghost small" data-rplay title="Diesen Absatz anhören (gewählter Take; wird bei Bedarf gesprochen)">▶</button>
+          <button class="ghost small" data-rnew title="Neuen Take aufnehmen und anhören">🔁</button></div>
+          <select data-rtake class="small" title="Take für das Zusammenfügen wählen" ${g.takes.length > 1 ? "" : "hidden"}>
+            ${g.takes.map((t) => `<option value="${t}" ${t === g.take ? "selected" : ""}>Take ${t + 1}</option>`).join("")}</select></td>
+        <td style="white-space:nowrap"><span data-rst></span>
+          <button class="ghost small" data-rsave hidden title="Diesen Absatz speichern">💾</button></td></tr>`).join("")}</tbody></table></div>`;
+  const tags = $(".regie-tags", box);
+  const top = $(".top") ? $(".top").offsetHeight : 0;
+  tags.style.top = `${top}px`;  // Leiste bleibt unter dem Kopf stehen, solange der Editor sichtbar ist
+  const status = $("#regie-status");
+  let queue = Promise.resolve(), pending = 0;
+  const norm = (t) => t.replace(/\s+/g, " ").trim();
+  const bare = (t) => t.replace(/<[^<>\n]{1,40}>/g, "").replace(/\[[a-z-]+\]/g, "").replace(/\s+/g, "");
+  const showInfo = (tr) => {  // Hinweis, wenn der Sprechtext im Wortlaut vom Folgentext abweicht
+    const ta = $('[data-rf="text"]', tr);
+    $("[data-rinfo]", tr).hidden = !ta.value.trim() || bare(ta.value) === bare(ta.dataset.orig);
+  };
+  const rowState = (tr) => {
+    const ta = $('[data-rf="text"]', tr);
+    return { nr: +tr.dataset.rnr, stil: $('[data-rf="stil"]', tr).value, tempo: $('[data-rf="tempo"]', tr).value, text: norm(ta.value) === norm(ta.dataset.orig) ? "" : ta.value };
+  };
+  const saveAll = $("#regie-save");
+  const rows = () => [...box.querySelectorAll("[data-rnr]")];
+  rows().forEach((tr) => (tr.dataset.saved = JSON.stringify(rowState(tr))));
+  const isDirty = (tr) => JSON.stringify(rowState(tr)) !== tr.dataset.saved;
+  const refreshDirty = () => {  // Speichern-Knöpfe nur, wenn es Ungespeichertes gibt
+    let n = 0;
+    rows().forEach((tr) => { const d = isDirty(tr); $("[data-rsave]", tr).hidden = !d; n += d ? 1 : 0; });
+    saveAll.disabled = !n;
+    saveAll.textContent = n ? `💾 Speichern (${n})` : "💾 Speichern";
+    if (n && !pending) status.textContent = `${n} ungespeichert`;
+  };
+  const saveRow = (tr) => {
+    clearTimeout(tr._timer);
+    if (!isDirty(tr)) return refreshDirty();
+    const state = rowState(tr);
+    const json = JSON.stringify(state);
+    const mark = $("[data-rst]", tr), err = $("[data-rerr]", tr);
+    mark.textContent = "…"; mark.title = ""; pending++; status.textContent = "speichert …";
+    queue = queue.then(async () => {
+      try {
+        await api(W(`/episodes/${id}/tts/regie`), { method: "PUT", body: { segmente: [state] } });
+        tr.dataset.saved = json;
+        mark.textContent = "✓"; mark.className = "muted"; err.textContent = "";
+      } catch (e) {
+        mark.textContent = "⚠"; mark.className = "err"; mark.title = e.message;
+        err.textContent = `Nicht gespeichert: ${e.message}`;  // bleibt sichtbar, bis es klappt
+        toast(e.message, "bad");
+      }
+      pending--;
+      status.textContent = pending ? "speichert …" : rows().some(isDirty) ? "" : "alles gespeichert ✓";
+      refreshDirty();
+    });
+  };
+  saveAll.onclick = () => rows().filter(isDirty).forEach(saveRow);
+  box.querySelectorAll("[data-rorig]").forEach((b) => (b.onclick = () => {
+    const tr = b.closest("tr"), ta = $('[data-rf="text"]', tr);
+    ta.value = ta.dataset.orig;
+    showInfo(tr);
+    saveRow(tr);
+  }));
+  box.querySelectorAll("[data-rsave]").forEach((b) => (b.onclick = () => saveRow(b.closest("tr"))));
+  let last = null;
+  box.querySelectorAll("textarea[data-rf]").forEach((t) => {
+    const tr = t.closest("tr");
+    t.onfocus = () => (last = t);
+    t.onblur = () => saveRow(tr);
+    t.oninput = () => {  // kurz nach dem Tippen von selbst speichern
+      refreshDirty();
+      showInfo(tr);
+      clearTimeout(tr._timer);
+      tr._timer = setTimeout(() => saveRow(tr), 1500);
+    };
+  });
+  box.querySelectorAll("select[data-rf]").forEach((sel) => (sel.onchange = () => saveRow(sel.closest("tr"))));
+  box.querySelectorAll("[data-rins]").forEach((b) => (b.onmousedown = (e) => e.preventDefault()));
+  box.querySelectorAll("[data-rins]").forEach((b) => (b.onclick = () => {
+    if (!last) return toast("Erst in einen Sprechtext klicken.");
+    const a = last.selectionStart ?? last.value.length, z = last.selectionEnd ?? a;
+    const ins = b.dataset.rins;
+    const before = `${last.value.slice(0, a)}${a && last.value[a - 1] !== " " ? " " : ""}${ins} `;
+    last.value = `${before}${last.value.slice(z).replace(/^\s+/, "")}`.replace(/\s+$/, "");
+    last.focus();
+    last.setSelectionRange(before.length, before.length);
+    saveRow(last.closest("tr"));
+  }));
+  const picked = () => [...box.querySelectorAll("[data-rsel]:checked")].map((c) => +c.closest("tr").dataset.rnr);
+  const retake = $("#regie-retake");
+  box.querySelectorAll("[data-rsel]").forEach((c) => (c.onchange = () => {
+    const n = picked().length;
+    retake.disabled = !n;
+    retake.textContent = n ? `${n} ${n > 1 ? "Absätze" : "Absatz"} neu sprechen` : "Ausgewählte neu sprechen";
+  }));
+  // ---- Ton je Absatz: anhören, neuer Take, Take wählen (zusammengefügt wird erst mit „Hörspiel zusammenfügen“)
+  let player = null, playBtn = null;
+  const stopPlay = () => {  // laufende Wiedergabe beenden, Knopf zurück auf ▶
+    if (player) player.pause();
+    if (playBtn) { playBtn.textContent = "▶"; playBtn.title = "Diesen Absatz anhören (gewählter Take; wird bei Bedarf gesprochen)"; }
+    player = playBtn = null;
+  };
+  const play = (name, tr) => {
+    stopPlay();
+    const audio = new Audio(W(`/episodes/${id}/tts/absatz/${name}`));
+    player = audio;
+    playBtn = $("[data-rplay]", tr);
+    playBtn.textContent = "⏸"; playBtn.title = "Anhalten";
+    audio.onended = audio.onerror = () => { if (player === audio) stopPlay(); };
+    audio.play().catch(() => { if (player === audio) stopPlay(); });
+  };
+  const speak = async (tr, body, autoplay = true) => {
+    const nr = +tr.dataset.rnr, mark = $("[data-rst]", tr);
+    rows().filter(isDirty).forEach(saveRow);
+    await queue;  // erst alle Änderungen speichern, dann sprechen
+    tr.querySelectorAll("[data-rplay],[data-rnew],[data-rtake]").forEach((b) => (b.disabled = true));
+    mark.textContent = "🎙"; mark.title = "wird gesprochen …"; mark.className = "muted";
+    try {
+      const res = await api(W(`/episodes/${id}/tts/absatz/${nr}`), { method: "POST", body });
+      const sel = $("[data-rtake]", tr);
+      sel.innerHTML = res.takes.map((t) => `<option value="${t}" ${t === res.gewaehlt ? "selected" : ""}>Take ${t + 1}</option>`).join("");
+      sel.hidden = res.takes.length < 2;
+      mark.textContent = `${res.sekunden}s`; mark.title = `Take ${res.take + 1}${res.take === res.gewaehlt ? " (gewählt)" : ""}`;
+      if (autoplay) play(res.datei, tr);
+      return res;
+    } catch (e) {
+      mark.textContent = "⚠"; mark.className = "err"; mark.title = e.message; toast(e.message, "bad");
+    } finally {
+      tr.querySelectorAll("[data-rplay],[data-rnew],[data-rtake]").forEach((b) => (b.disabled = false));
+    }
+  };
+  box.querySelectorAll("[data-rplay]").forEach((b) => (b.onclick = () => (b === playBtn ? stopPlay() : speak(b.closest("tr"), {}))));
+  box.querySelectorAll("[data-rnew]").forEach((b) => (b.onclick = () => speak(b.closest("tr"), { neu: true })));
+  box.querySelectorAll("[data-rtake]").forEach((sel) => (sel.onchange = () => speak(sel.closest("tr"), { take: +sel.value, waehlen: true })));
+  retake.onclick = () => guard(async () => {
+    const rows = picked().map((nr) => $(`tr[data-rnr="${nr}"]`, box));
+    if (!rows.length) return;
+    retake.disabled = true;
+    for (const tr of rows) {  // nacheinander: nur diese Absätze werden neu gesprochen
+      status.textContent = `spricht Absatz ${tr.dataset.rnr} …`;
+      await speak(tr, { neu: true }, false);
+      $("[data-rsel]", tr).checked = false;
+    }
+    status.textContent = `${rows.length} neue Takes – mit ▶ anhören, im Auswahlfeld tauschen.`;
+    retake.textContent = "Ausgewählte neu sprechen";
+  });
+}
+
 async function ttsCard(id) {
   const box = $("#rd-tts");
   if (!box) return;
@@ -2884,14 +3194,22 @@ async function ttsCard(id) {
             <td class="muted">${st.sprecher[n].quelle === "automatisch" ? "reihum vom Server der Erzähler-Stimme" : ""}</td></tr>`; }).join("")}</table>
         <div class="small muted">Die Besetzung gilt für alle Folgen dieser Welt; Figuren ohne Wahl bekommen reihum eine freie Stimme derselben Sprache.</div>`}
     ${st.fehlt.length ? `<div class="small err">Ohne Stimme: ${esc(st.fehlt.join(", "))}</div>` : ""}
+    ${regieRow(st.regie)}
     <div class="row">${st.datei ? `<audio controls preload="none" src="${W(`/episodes/${id}/tts.${ttsExt}`)}" style="height:36px"></audio>
         <a class="small" href="${W(`/episodes/${id}/tts.${ttsExt}?download=1`)}">${ttsExt.toUpperCase()} herunterladen</a>` : ""}
-      <button class="ki" id="tts-render" ${st.fehlt.length ? "disabled" : ""}>${st.datei ? "Neu vertonen" : "🎙 Mit TTS-Server vertonen"}</button>
+      <button class="ki" id="tts-render" ${st.fehlt.length ? "disabled" : ""}>${st.datei ? "Hörspiel neu zusammenfügen (MP3)" : "🎙 Hörspiel vertonen (MP3)"}</button>
       ${st.erstellt ? `<span class="small muted">zuletzt ${esc(st.erstellt)} · ${esc(st.datei)}</span>` : ""}</div></div>`;
   const save = (body) => guard(async () => { await api(W(`/episodes/${id}/tts`), { method: "PUT", body }); ttsCard(id); });
   $("#tts-mode").onchange = (e) => save({ modus: e.target.value });
   if ($("#tts-single")) $("#tts-single").onchange = (e) => save({ stimme: e.target.value });
   box.querySelectorAll("[data-cast]").forEach((sel) => (sel.onchange = () => save({ besetzung: { [sel.dataset.cast]: sel.value } })));
+  if ($("#tts-regie")) $("#tts-regie").onchange = (e) => save({ regie: e.target.value });
+  if ($("#tts-regie-neu")) $("#tts-regie-neu").onclick = (e) => guard(async () => {
+    e.target.disabled = true;
+    await api(W(`/episodes/${id}/tts/regie`), { method: "POST", body: {} });
+    toast("KI-Regie läuft – Fortschritt oben rechts."); pollJobs();
+  });
+  if ($("#tts-regie-details")) $("#tts-regie-details").ontoggle = (e) => { if (e.target.open) regieEditor(id); };
   $("#tts-render").onclick = (e) => guard(async () => {
     e.target.disabled = true;  // Doppelklick startet sonst zwei Vertonungen derselben Folge
     await api(W(`/episodes/${id}/tts/vertonen`), { method: "POST", body: {} });
@@ -2942,7 +3260,10 @@ function enhanceTable(t) {
     const bar = document.createElement("div");
     bar.className = "tfilter";
     bar.innerHTML = `<input type="search" placeholder="Filtern …" value="${esc(st.q)}"><span class="small muted"></span>`;
-    t.parentNode.insertBefore(bar, t);
+    const slot = t.closest("[data-filterziel]");  // Filter außerhalb eines scrollbaren Bereichs ablegen
+    const target = slot && document.querySelector(slot.dataset.filterziel);
+    if (target) target.appendChild(bar);
+    else t.parentNode.insertBefore(bar, t);
     info = bar.querySelector("span");
     const inp = bar.querySelector("input");
     inp.oninput = () => { st.q = inp.value; apply(); };

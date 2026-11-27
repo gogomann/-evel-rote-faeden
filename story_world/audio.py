@@ -270,14 +270,24 @@ def export_json(conn: sqlite3.Connection, episode_id: int, voice_list: list | No
     ep = episodes.get_episode(conn, episode_id)
     if tts.servers():
         # Eigene TTS-Server eingerichtet: Besetzung und Modus (Hörspiel/Hörbuch) aus der TTS-Einrichtung
+        from . import regie
         p = tts.plan(conn, episode_id)
         first = next((p["sprecher"][s["sprecher"]] for s in p["segmente"] if s["typ"] == "narrator"),
                      next(iter(p["sprecher"].values()), {}))
+        segmente = p["segmente"]
+        direction = regie.gueltig(conn, episode_id, ep["segmente"])
+        if direction:  # Hörspiel-Regie: Text mit Geräusch-Tags, Anfangsstil und Teile bei Stilwechseln (wie gesprochen)
+            by_id = {s["id"]: s for s in tts.servers()}
+            segmente = []
+            for index, seg in enumerate(p["segmente"]):
+                parts = regie.teile_fuer_segment(direction, index, by_id.get(seg["server"]) or {}, seg["text"])
+                segmente.append(dict(seg, **regie.sprechfassung(parts, seg["text"])))
         return {
             "folge": ep["release_nr"], "titel": ep["title"], "typ": ep["type"], "minuten": ep["minuten"],
             "quelle": "tts-server", "modus": p["modus"], "sprache": first.get("sprache") or DEFAULT_LANG,
             "erzaehler_stimme": first.get("stimme"), "server": p["server"], "sprecher": p["sprecher"],
-            "fehlt": p["fehlt"], "segmente": p["segmente"], "aussprache": lexicon(conn),
+            "fehlt": p["fehlt"], "segmente": segmente, "aussprache": lexicon(conn),
+            **({"regie": regie.zusammenfassung(conn, episode_id)} if direction else {}),
         }
     segments = ep["segmente"]
     pool = voices() if voice_list is None else [v if isinstance(v, dict) else {"name": v, "lang": ""} for v in voice_list]

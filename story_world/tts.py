@@ -16,6 +16,11 @@ Konfiguration liegt wie die KI-Anbieter in story_world.config.json (Schlüssel "
 nichts wird gelöscht). Besetzung je Welt (Sprecher → Server|Stimme) und Einstellungen je Folge (Hörspiel = mehrere
 Stimmen, Hörbuch = eine Stimme für alles) stehen in world_meta.
 
+Hörspiel-Regie (regie.py): Kann ein Server Sprechstile und Geräusch-Tags (Libra-TTS: /v1/audio/voices meldet
+„styles“ und „tags“), legt die KI je Absatz Stil, Stilwechsel und Tags fest; sie gehen als „style“ und im Text an den
+Server (ein Absatz mit Stilwechseln = mehrere Anfragen). Ein Tempo („pace“) wird nie gesetzt. Neue Takes einzelner
+Absätze gehen als „seed“ mit. Stufe je Folge: aus, dezent, lebendig. Der mitgelieferte Libra-Server (libra.py) wird automatisch eingetragen.
+
 Vertonung: Text je Absatz an Satzgrenzen in Stücke ≤ max_zeichen zerlegen → Server → WAV-Stücke (Zwischenspeicher
 _tts_cache, ein Neustart macht dort weiter) → eine WAV-Datei (mono, 16 bit, Abtastrate des ersten Stücks) → mit
 lame/ffmpeg eine MP3 mit ID3-Tags (mp3.py; die WAV wandert dann nach _wav). Ältere
@@ -79,6 +84,12 @@ PRESETS = [
      "key_url": "https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices",
      "info": "Viele Neural-Stimmen, auch deutsche. Speech-Ressource anlegen, Schlüssel 1 kopieren; die Region "
              "(z. B. westeurope, germanywestcentral) steht in der Adresse. Gratis-Stufe F0 verfügbar."},
+    {"id": "libra", "name": "Libra-TTS (Stile & Geräusche)", "typ": "openai", "base_url": "http://127.0.0.1:8880",
+     "modell": "tts-1", "sprache": "de", "max_zeichen": 600, "needs_key": False, "cloud": False,
+     "key_url": "https://huggingface.co/Ekam/Libra-TTS",
+     "info": "Liegt Story World bei (zusatz/libra-tts) und startet automatisch mit, sobald es eingerichtet ist. "
+             "8 Stimmen, 12 Sprechstile (warm, sad, whispering …) und Geräusche wie <sigh> oder <laugh> – die "
+             "Hörspiel-Regie nutzt sie. Läuft offline. Hier nur für einen Libra-Server auf einem anderen Rechner."},
     {"id": "kokoro", "name": "Kokoro-FastAPI (lokal)", "typ": "openai", "base_url": "http://localhost:8880",
      "modell": "kokoro", "max_zeichen": 400, "needs_key": False, "cloud": False,
      "key_url": "https://github.com/remsky/Kokoro-FastAPI",
@@ -487,8 +498,47 @@ def detect_language(s: dict) -> str | None:
     return _LANG_NAMES.get(value) or (value if len(value) == 2 else None)
 
 
+def fetch_regie(s: dict) -> dict | None:
+    """Kann der Server Sprechstile und Geräusch-Tags? (Libra-TTS: GET /v1/audio/voices → styles, paces, tags)"""
+    if s.get("typ") != "openai" or s.get("preset") == "openai":
+        return None
+    try:
+        payload = _json(s, "/audio/voices")
+    except TTSError:
+        return None
+    return _regie_from(payload)
+
+
+def _regie_from(payload) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    styles = [str(x) for x in payload.get("styles") or [] if isinstance(x, str)]
+    tags = [str(x) for x in payload.get("tags") or [] if isinstance(x, str) and x.startswith("<")]
+    if not styles and not tags:
+        return None
+    paces = [str(x) for x in payload.get("paces") or [] if isinstance(x, str)] or ["slow", "fast"]
+    return {"stile": styles, "tempi": paces, "tags": tags}
+
+
+def ensure_regie(server_ids) -> None:
+    """Server, die noch nie auf Stile/Geräusche geprüft wurden (z. B. vor dieser Funktion eingetragen), jetzt einmal
+    fragen und das Ergebnis speichern. Nicht erreichbar → beim nächsten Mal erneut."""
+    for sid in server_ids or []:
+        try:
+            s = get_server(sid)
+        except LookupError:
+            continue
+        if "regie" in s or s.get("typ") != "openai" or s.get("preset") == "openai":
+            continue
+        try:
+            payload = _json(s, "/audio/voices", timeout=8)
+        except TTSError:
+            continue
+        _set_state(sid, regie=_regie_from(payload))
+
+
 def verify(sid: str) -> dict:
-    """Verbindung prüfen und Stimmen (und Modelle) laden."""
+    """Verbindung prüfen und Stimmen (und Modelle, Stile/Geräusche) laden."""
     s = get_server(sid)
     if PRESET_BY_ID.get(s.get("preset") or "custom", {}).get("needs_key") and not s.get("api_key"):
         message = "Für diesen Anbieter fehlt noch der API-Schlüssel."
@@ -500,13 +550,13 @@ def verify(sid: str) -> dict:
     except TTSError as exc:
         _set_state(sid, status="fehler", last_error=str(exc)[:500], geprueft_am=time.strftime("%Y-%m-%d %H:%M"))
         return {"ok": False, "fehler": str(exc)}
-    fields = {"status": "ok", "last_error": "", "stimmen": voices, "modelle": models,
+    fields = {"status": "ok", "last_error": "", "stimmen": voices, "modelle": models, "regie": fetch_regie(s),
               "geprueft_am": time.strftime("%Y-%m-%d %H:%M"),
               "sprache_erkannt": None if any(v.get("sprache") for v in voices) else detect_language(s)}
     if not s.get("modell") and models:
         fields["modell"] = models[0]
     _set_state(sid, **fields)
-    return {"ok": True, "stimmen": len(voices), "modelle": models}
+    return {"ok": True, "stimmen": len(voices), "modelle": models, "regie": bool(fields["regie"])}
 
 
 def _voice_info(s: dict, voice: str) -> dict:
@@ -541,8 +591,9 @@ def _not_audio(s: dict, raw: bytes, ctype: str) -> TTSError:
     return TTSError(f"{s.get('name')}: keine Audio-Antwort ({hint}).")
 
 
-def synth(s: dict, text: str, voice: str, language: str | None = None) -> bytes:
-    """Ein Stück Text sprechen lassen; liefert WAV-Bytes."""
+def synth(s: dict, text: str, voice: str, language: str | None = None, extra: dict | None = None) -> bytes:
+    """Ein Stück Text sprechen lassen; liefert WAV-Bytes. extra: Zusatzfelder der Regie (style, pace) – nur an
+    OpenAI-kompatible eigene Server (OpenAI selbst lehnt unbekannte Felder ab)."""
     typ = s.get("typ")
     if typ == "elevenlabs":
         model = s.get("modell") or "eleven_multilingual_v2"
@@ -580,6 +631,8 @@ def synth(s: dict, text: str, voice: str, language: str | None = None) -> bytes:
         body = {"model": s.get("modell") or "tts-1", "input": text, "voice": voice, "response_format": "wav"}
         if language and s.get("preset") != "openai":  # OpenAI lehnt unbekannte Felder ab
             body["language"] = language.split("-")[0]
+        if extra and s.get("preset") != "openai":
+            body.update({k: v for k, v in extra.items() if v})
         raw, ctype = _http(s, "POST", "/audio/speech", body)
     if raw[:4] != b"RIFF":
         hint = raw[:200].decode("utf-8", "replace") if "json" in ctype or raw[:1] in (b"{", b"[") else ctype
@@ -732,8 +785,10 @@ def set_cast(conn: sqlite3.Connection, changes: dict) -> dict:
 
 
 def episode_settings(conn: sqlite3.Connection, episode_id: int) -> dict:
+    from . import regie
     data = _meta_json(conn, f"tts.folge.{episode_id}", {})
-    return {"modus": data.get("modus") if data.get("modus") in MODI else "hoerspiel", "stimme": data.get("stimme") or ""}
+    return {"modus": data.get("modus") if data.get("modus") in MODI else "hoerspiel", "stimme": data.get("stimme") or "",
+            "regie": data.get("regie") if data.get("regie") in regie.STUFEN else regie.STANDARD_STUFE}
 
 
 def set_episode_settings(conn: sqlite3.Connection, episode_id: int, data: dict) -> dict:
@@ -746,6 +801,11 @@ def set_episode_settings(conn: sqlite3.Connection, episode_id: int, data: dict) 
         if data["stimme"]:
             _split_ref(data["stimme"])
         current["stimme"] = data["stimme"] or ""
+    if "regie" in data:
+        from . import regie
+        if data["regie"] not in regie.STUFEN:
+            raise ValueError("Unbekannte Regie-Stufe.")
+        current["regie"] = data["regie"]
     service.set_meta(conn, f"tts.folge.{episode_id}", json.dumps(current, ensure_ascii=False))
     return current
 
@@ -854,18 +914,21 @@ def _set_aside(path: Path) -> None:
         path.replace(old / f"{path.stem}_{stamp}{path.suffix}")
 
 
-def _cached_chunk(cache: Path, s: dict, text: str, voice: str, language: str | None, speak) -> bytes:
-    key = hashlib.sha1(json.dumps([s["base_url"], s.get("typ"), s.get("modell"), voice, language, text],
-                                  ensure_ascii=False).encode("utf-8")).hexdigest()
+def _cached_chunk(cache: Path, s: dict, text: str, voice: str, language: str | None, speak,
+                  extra: dict | None = None) -> bytes:
+    ident = [s["base_url"], s.get("typ"), s.get("modell"), voice, language, text] + ([extra] if extra else [])
+    key = hashlib.sha1(json.dumps(ident, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     path = cache / f"{key}.wav"
     if path.exists():
         return path.read_bytes()
     error = None
     for attempt in range(RETRIES + 1):
         try:
-            data = speak(s, text, voice, language)
+            data = speak(s, text, voice, language, extra) if extra else speak(s, text, voice, language)
             decode_wav(data)  # prüfen, bevor es in den Zwischenspeicher geht
-            path.write_bytes(data)
+            tmp = path.with_name(f"{path.stem}.{threading.get_ident()}.tmp")
+            tmp.write_bytes(data)
+            tmp.replace(path)  # atomar: Vertonung und Einzel-Absatz können parallel dieselbe Datei schreiben
             return data
         except TTSError as exc:
             error = exc
@@ -920,6 +983,115 @@ def speak_single(segments: list, ref: str, target: Path, words: list | None = No
             "stuecke": pieces, "abtastrate": rate}
 
 
+def _segment_pieces(s: dict, parts: list, words: list) -> list:
+    """Teile eines Absatzes → [(Stücke ≤ max_zeichen, Zusatzfelder)]; Tags überstehen Lexikon und Zerlegen."""
+    from . import audio, regie
+    limit = int(s.get("max_zeichen") or DEFAULT_MAX_CHARS)
+    out = []
+    for text, extra in parts:
+        chunks = chunk_text(audio.apply_lexicon(regie.schuetzen(text), words, s.get("typ") in SSML_TYPES), limit)
+        out.append(([regie.zurueck(c) for c in chunks], extra))
+    return out
+
+
+TEILE = "_teile"
+_TEIL_NAME = re.compile(r"^\d{4}-t\d{1,4}-[0-9a-f]{10}\.wav$")
+
+
+def segment_file(slug: str, episode_id: int, name: str) -> Path:
+    if not _TEIL_NAME.match(name or ""):
+        raise LookupError("Ungültiger Dateiname.")
+    path = output_dir(slug) / TEILE / str(int(episode_id)) / name
+    if not path.is_file():
+        raise LookupError("Diesen Take gibt es (noch) nicht als Datei.")
+    return path
+
+
+def segment_take(conn: sqlite3.Connection, slug: str, episode_id: int, nr: int, take: int | None = None,
+                 neu: bool = False, waehlen: bool = False, speak=None, cfg: dict | None = None,
+                 job_id: int | None = None) -> dict:
+    """Einen Absatz einzeln sprechen (zum Anhören) – gewählter Take, ein bestimmter Take oder ein neuer (neu=True).
+    Die Stücke landen im selben Zwischenspeicher wie beim Zusammenfügen; die WAV je Take liegt unter
+    _teile/<folge>/ und bleibt erhalten (Takes sind frei wählbar und tauschbar)."""
+    from . import audio, regie
+    speak = speak or synth
+    own_cfg = cfg is None
+    cfg = cfg or _cfg()
+    by_id = {s["id"]: s for s in servers(cfg)}
+    p = plan(conn, episode_id, cfg)
+    if not 1 <= int(nr) <= len(p["segmente"]):
+        raise LookupError(f"Absatz {nr} gibt es nicht.")
+    seg = p["segmente"][int(nr) - 1]
+    if not seg.get("server"):
+        raise TTSError(f"Keine Stimme für {seg['sprecher']}.")
+    if own_cfg:
+        if by_id[seg["server"]].get("mitgeliefert"):
+            from . import libra
+            try:
+                libra.eintragen(libra.bereit())
+            except Exception as exc:
+                raise TTSError(f"Libra-TTS (mitgeliefert) ist nicht bereit: {exc}")
+        ensure_regie(p["server"])
+        cfg = _cfg()
+        by_id = {s["id"]: s for s in servers(cfg)}
+        p = plan(conn, episode_id, cfg)
+        seg = p["segmente"][int(nr) - 1]
+    s = by_id[seg["server"]]
+    caps = regie.faehig(s)
+    stufe = p["einstellung"]["regie"]
+    if caps and stufe != "aus" and regie.gueltig(conn, episode_id) is None:  # einmal KI-Regie für die ganze Folge
+        regie.sicherstellen(conn, episode_id, stufe, regie.vereinigen([regie.faehig(by_id[x]) for x in p["server"]]),
+                            job_id=job_id)
+    if neu:
+        if not caps:
+            raise TTSError("Neue Takes gehen nur mit Servern, die einen Seed kennen (z. B. Libra-TTS).")
+        take = regie.take_neu(conn, episode_id, int(nr))
+    elif take is not None and waehlen:
+        regie.take_waehlen(conn, episode_id, int(nr), int(take))
+    data = regie.gueltig(conn, episode_id)
+    chosen, all_takes = regie.takes(data, int(nr) - 1)
+    use = chosen if take is None else int(take)
+    if use not in all_takes:
+        raise ValueError(f"Absatz {nr}: Take {use + 1} gibt es nicht.")
+    parts = regie.teile_fuer_segment(data, int(nr) - 1, s, seg["text"], nur_take=stufe == "aus", take=use)
+    pieces = _segment_pieces(s, parts, audio.lexicon(conn))
+    cache = output_dir(slug) / "_tts_cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    ident = hashlib.sha1(json.dumps([s["base_url"], s.get("modell"), seg["stimme"], seg["sprache"], pieces],
+                                    ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:10]
+    target = output_dir(slug) / TEILE / str(int(episode_id)) / f"{int(nr):04d}-t{use}-{ident}.wav"
+    rate, frames = None, 0
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_suffix(".teil.wav")
+        writer = None
+        try:
+            for chunks, extra in pieces:
+                for chunk in chunks:
+                    src, samples = decode_wav(_cached_chunk(cache, s, chunk, seg["stimme"], seg["sprache"], speak, extra))
+                    if writer is None:
+                        rate = src
+                        writer = wave.open(str(partial), "wb")
+                        writer.setnchannels(1)
+                        writer.setsampwidth(2)
+                        writer.setframerate(rate)
+                    else:
+                        writer.writeframes(bytes(2 * int(rate * PAUSE_CHUNK)))
+                    samples = resample(samples, src, rate)
+                    if sys.byteorder == "big":
+                        samples.byteswap()
+                    writer.writeframes(samples.tobytes())
+        finally:
+            if writer is not None:
+                writer.close()
+        partial.replace(target)
+    with wave.open(str(target), "rb") as fh:
+        rate, frames = fh.getframerate(), fh.getnframes()
+    return {"nr": int(nr), "take": use, "gewaehlt": regie.takes(regie.gueltig(conn, episode_id), int(nr) - 1)[0],
+            "takes": regie.takes(regie.gueltig(conn, episode_id), int(nr) - 1)[1], "datei": target.name,
+            "sekunden": round(frames / rate, 1) if rate else 0}
+
+
 _RUNNING: set = set()
 _RUNNING_LOCK = threading.Lock()
 
@@ -948,12 +1120,26 @@ def render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | N
 
 def _render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | None, speak, cfg: dict | None,
             as_mp3: bool | None) -> Path:
-    from . import audio  # Aussprache-Lexikon und Pausen wie bei der macOS-Vertonung
+    from . import audio, regie  # Aussprache-Lexikon und Pausen wie bei der macOS-Vertonung
 
     speak = speak or synth
+    own_cfg = cfg is None
     cfg = cfg or _cfg()
     by_id = {s["id"]: s for s in servers(cfg)}
     p = plan(conn, episode_id, cfg)
+    if own_cfg and any(by_id[sid].get("mitgeliefert") for sid in p["server"]):
+        from . import libra  # mitgelieferter Server: starten bzw. abwarten, Adresse (Port) aktualisieren
+        try:
+            libra.eintragen(libra.bereit())
+        except Exception as exc:
+            raise TTSError(f"Libra-TTS (mitgeliefert) ist nicht bereit: {exc}")
+        cfg = _cfg()
+        by_id = {s["id"]: s for s in servers(cfg)}
+        p = plan(conn, episode_id, cfg)
+    if own_cfg and any("regie" not in by_id[sid] for sid in p["server"]):
+        ensure_regie(p["server"])  # Stile/Geräusche erkennen, auch ohne erneutes „Prüfen“
+        cfg = _cfg()
+        by_id = {s["id"]: s for s in servers(cfg)}
     if not p["segmente"]:
         raise TTSError("Die Folge enthält keinen Text.")
     if p["fehlt"]:
@@ -964,12 +1150,21 @@ def _render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | 
     intro = {"sprecher": episodes.NARRATOR, "typ": "narrator",
              "text": f"{p['titel'] or ''}." if p.get("form") == "geschichte" else f"Folge {p['folge']}. {p['titel'] or ''}.",
              "server": first_voice["server"], "stimme": first_voice["stimme"], "sprache": first_voice["sprache"]}
-    items = []
-    for seg in [intro] + p["segmente"]:
+    caps = regie.vereinigen([regie.faehig(by_id[sid]) for sid in p["server"]])
+    notes: list = []
+    direction = regie.sicherstellen(conn, episode_id, p["einstellung"]["regie"], caps, job_id=job_id,
+                                    log=notes.append) if caps else None
+    takes = direction or (regie.gueltig(conn, episode_id) if caps else None)  # neue Takes gelten auch ohne Regie
+    items, spoken_segments = [], []  # items: (Segment, Stücke, Zusatzfelder, erster Teil des Absatzes?)
+    for n, seg in enumerate([intro] + p["segmente"]):
         s = by_id[seg["server"]]
-        limit = int(s.get("max_zeichen") or DEFAULT_MAX_CHARS)
-        items.append((seg, chunk_text(audio.apply_lexicon(seg["text"], words, s.get("typ") in SSML_TYPES), limit)))
-    total = sum(len(c) for _, c in items) or 1
+        parts = regie.teile_fuer_segment(takes, n - 1, s, seg["text"], nur_take=direction is None) if n \
+            else [(seg["text"], {})]
+        if n:  # fürs Begleit-JSON: Text mit Geräusch-Tags und Stil, so wie gesprochen
+            spoken_segments.append(dict(seg, **regie.sprechfassung(parts, seg["text"])))
+        for k, (chunks, extra) in enumerate(_segment_pieces(s, parts, words)):
+            items.append((seg, chunks, extra, k == 0))
+    total = sum(len(c) for _, c, _, _ in items) or 1
     conn.commit()  # Protokoll schreibt über eine eigene Verbindung
     run = runs.Run(conn, "Hörbuch (TTS-Server)", f"Folge {p['folge']}: {p['titel'] or ''}", "audio",
                    f"Folge {p['folge']} über TTS-Server vertonen – {MODI[p['modus']]}, {len(p['segmente'])} Absätze, "
@@ -981,15 +1176,28 @@ def _render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | 
     try:
         run.step("Stimmen: " + ", ".join(f"{k} → {by_id[v['server']]['name']}/{v.get('stimme_name') or v['stimme']}"
                                           for k, v in p["sprecher"].items() if v["server"]), 2)
+        for note in notes:
+            run.step(note, None, "warnung")
+        if direction:
+            styled = sum(1 for _, _, extra, _ in items if extra.get("style"))
+            tags = sum(len(regie._TAG.findall(c)) for _, chunks, _, _ in items for c in chunks)
+            run.step(f"Regie ({regie.STUFEN.get(direction.get('stufe'), 'von Hand').split(' –')[0]}): "
+                     f"{styled} Teile mit Sprechstil, {tags} Geräusche", 2)
+        retakes = sum(1 for e in (takes or {}).get("segmente") or [] if e.get("take"))
+        if retakes:
+            run.step(f"{retakes} Absätze mit gewähltem anderem Take; schon Gesprochenes kommt aus dem Zwischenspeicher", 2)
         done, rate, writer, previous = 0, None, None, None
         try:
-            for seg, chunks in items:
+            for seg, chunks, extra, first in items:
                 s = by_id[seg["server"]]
                 if writer is not None and previous is not None:
-                    pause = PAUSE_SEGMENT_SAME if seg["sprecher"] == previous else PAUSE_SEGMENT_CHANGE
+                    if not first:  # Stilwechsel im selben Absatz: nur kurze Pause
+                        pause = PAUSE_CHUNK
+                    else:
+                        pause = PAUSE_SEGMENT_SAME if seg["sprecher"] == previous else PAUSE_SEGMENT_CHANGE
                     writer.writeframes(bytes(2 * int(rate * pause)))
                 for index, chunk in enumerate(chunks):
-                    src, samples = decode_wav(_cached_chunk(cache, s, chunk, seg["stimme"], seg["sprache"], speak))
+                    src, samples = decode_wav(_cached_chunk(cache, s, chunk, seg["stimme"], seg["sprache"], speak, extra))
                     if writer is None:
                         rate = src
                         writer = wave.open(str(partial), "wb")
@@ -1028,7 +1236,9 @@ def _render(conn: sqlite3.Connection, slug: str, episode_id: int, job_id: int | 
             _set_aside(target.with_suffix(".mp3"))  # ältere MP3 würde sonst statt der neuen WAV ausgeliefert
         target.with_suffix(".json").write_text(json.dumps(
             {k: v for k, v in p.items() if k != "segmente"} | {"datei": final.name, "erstellt": time.strftime("%Y-%m-%d %H:%M"),
-                                                              "abtastrate": rate, "stuecke": total},
+                                                              "abtastrate": rate, "stuecke": total,
+                                                              "regie": regie.zusammenfassung(conn, episode_id),
+                                                              "segmente": spoken_segments},
             ensure_ascii=False, indent=1), encoding="utf-8")
         relative = str(final.relative_to(worlds.worlds_dir()))
         run.step(f"Hörbuch gespeichert: {relative}", 100, "ok")

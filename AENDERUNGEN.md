@@ -3,6 +3,27 @@
 Jede Version hat einen Abschnitt `## X.Y.Z – Kurztitel`. Nach einem Update zeigt Evel • Rote Fäden die Abschnitte
 seit der zuletzt genutzten Version als Hinweis an (auch nach manuellem ZIP-Entpacken).
 
+## 0.7.0 – Libra-TTS und Hörspiel-Regie
+> **Wichtig – neue Zusatzfunktion mit größerem Download (optional, einmalig)**
+> Evel bringt jetzt einen eigenen Sprach-Server für Hörspiele mit: **Libra-TTS** – Stimmen mit Sprechstilen und Geräuschen, offline auf deinem Rechner.
+> Das Update selbst ist klein. Wer Libra einrichtet, lädt **einmalig ca. 1,3 GB auf einem Mac mit Apple-Chip, ca. 2 GB auf Windows/Intel-Mac (Prozessor), mit NVIDIA-Grafikkarte bis ca. 4 GB**.
+> Quelle: Sprachmodell von Hugging Face (huggingface.co/Ekam/Libra-TTS), Python-Pakete von pypi.org (mit NVIDIA-Grafikkarte zusätzlich PyTorch von download.pytorch.org).
+> Der Download startet erst, wenn du zustimmst: beim nächsten Start im Startfenster („J“) oder später unter **Einstellungen → TTS-Server → „Einrichten“**. Spätere Updates laden das nicht erneut.
+> Danach ist Libra automatisch eingebunden: startet mit Evel, beendet sich mit Evel, steht unter TTS-Server bereit. Braucht Python 3.10 oder neuer. Evel funktioniert auch ohne.
+- Evel bringt einen eigenen Sprach-Server mit: **Libra-TTS** (Ordner `zusatz/libra-tts`) – 8 Stimmen, Sprechstile wie „warm“, „sad“ oder „whispering“ und Geräusche wie `<sigh>`, `<laugh>` oder `<short pause>`. Läuft offline auf deinem Rechner.
+- Einrichten: Beim ersten Start fragt das Startfenster, ob Libra eingerichtet werden soll (einmaliger Download, Größe und Quelle siehe oben; braucht Python 3.10 oder neuer). Alternativ Einstellungen → TTS-Server → „Einrichten“ oder `python3 -m story_world libra einrichten`. Wer ablehnt, wird nicht bei jedem Update erneut gefragt.
+- Danach startet Libra automatisch mit Evel, beendet sich mit ihm und steht unter TTS-Server als „Libra-TTS (mitgeliefert)“ bereit. Archiviert man ihn dort, startet er nicht mehr.
+- **Hörspiel-Regie:** Beim Vertonen über Libra legt die KI je Absatz Sprechstil und passende Geräusche fest – der Folgentext selbst bleibt unverändert. Stufe je Folge: aus, dezent (Standard) oder lebendig. Im Expertenmodus lässt sich die Regie ansehen und je Absatz ändern (Tags per Klick einfügen). Welches Modell die Regie macht, steht unter „Modelle je Aufgabe → Hörspiel-Regie“; ohne KI wird neutral vertont.
+- Atmen: Evel setzt beim Erstellen der Regie selbst regelmäßig Atmer (`<breath>`), vor langen Sätzen und nach längeren Passagen – damit die Stimmen wie Menschen klingen. Bei Angst oder Aufregung einmal schweres Atmen.
+- Stilwechsel mitten im Absatz: Die Regie wechselt die Sprechweise mit dem Inhalt – z. B. herzlich bei der Begrüßung, dokumentarisch bei Zahlen und Erklärungen, danach wieder herzlich. Im Editor per Klick auf `[documentary]`, `[warm]` … einfügbar.
+- Sprechtext umformulieren: Im Regie-Editor dürfen Wörter angepasst oder Sätze umgebaut werden, damit es gesprochen gut klingt. Das gilt nur fürs Hörspiel – der lesbare Folgentext bleibt im Original. „↺ Original“ holt den Folgentext zurück.
+- Tempo: Die KI setzt kein Tempo mehr, der Stil bringt sein Tempo mit. Wer im Editor selbst „slow“ oder „fast“ wählt, bekommt es genau so.
+- Regie-Editor: Geräusche, Stilwechsel, Filter und „neu vertonen“ bleiben oben stehen, nur die Absätze scrollen. Jeder Sprechtext ist direkt änderbar. Jede Änderung wird sofort gespeichert.
+- Einzelne Absätze anhören und neu aufnehmen: Im Regie-Editor hat jeder Absatz ▶ (anhören), 🔁 (neuer Take) und eine Take-Auswahl. Gesprochen wird nur dieser Absatz; alle Takes bleiben erhalten und lassen sich tauschen. Erst „Hörspiel zusammenfügen (MP3)“ setzt die gewählten Takes zur MP3 zusammen – ohne Bereits-Gesprochenes neu zu sprechen.
+- Updates: Programm-Updates erneuern Libra mit; Python-Umgebung, Sprachmodell und `server.conf` bleiben unangetastet. Braucht eine neue Version zusätzliche Pakete, installiert der nächste Start sie nach.
+- JSON-Export und das JSON neben der MP3 enthalten je Segment den Text mit den Geräusch-Tags (so wie gesprochen) sowie `stil` und bei Stilwechseln `teile`. In der Anzeige der Folge erscheinen die Tags nicht.
+- Schon eingetragene eigene Server (z. B. ein selbst gestarteter Libra) werden automatisch auf Stile und Geräusche geprüft – kein erneutes „Prüfen“ nötig.
+
 ## 0.6.2 – Stil-Abgleich mit fremdsprachigem Vorbild
 - Fehler behoben: Stammt das Vorbild aus einem Buch in einer anderen Sprache (z. B. die englische Ausgabe von „The Three-Body Problem“), wurde eine deutsche Folge trotzdem an Wortlänge, Wortvielfalt, Kommas und den deutschen „kleinen Wörtern“ gemessen. Das ergab unsinnige Abweichungen („‚die‘ häufiger“, Autorensignatur 20,99) und eine viel zu schlechte Stil-Treue.
 - Evel erkennt jetzt die Sprache von Vorbild und Folge (auch bei schon gespeicherten Fingerabdrücken). Bei unterschiedlicher Sprache werden nur Satzbau, Rhythmus, Dialoganteil und Satzzeichen verglichen; der Abgleich sagt dazu, was nicht vergleichbar ist. „Auffällig oft benutzt“ entfällt dann.

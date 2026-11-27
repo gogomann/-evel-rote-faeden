@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Libra-TTS</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6a66; --line: #e2e0da;
+    --accent: #2f5d50; --accent-text: #ffffff; --chip: #efede8; --err: #a2322a; --ok: #2f5d50;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --panel: #1f1f1d; --text: #ecebe7; --muted: #9a9892; --line: #33322f;
+            --accent: #7fb8a4; --accent-text: #10201b; --chip: #2a2a27; --err: #e0786f; --ok: #7fb8a4; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 20px 64px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 6px;
+          text-transform: uppercase; letter-spacing: 0.04em; }
+  textarea, select, input { width: 100%; font: inherit; color: var(--text); background: var(--bg);
+          border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
+  textarea { min-height: 220px; resize: vertical; line-height: 1.55; }
+  textarea:focus, select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+  .row4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 640px) { .row, .row4 { grid-template-columns: 1fr 1fr; } }
+  .meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .actions { display: flex; align-items: center; gap: 14px; margin-top: 16px; flex-wrap: wrap; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--chip); color: var(--text);
+           border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent);
+                   font-weight: 600; padding: 10px 22px; }
+  button:disabled { opacity: 0.55; cursor: default; }
+  #status { font-size: 13px; color: var(--muted); }
+  #status.err { color: var(--err); }
+  #result { display: none; margin-top: 16px; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #result audio { flex: 1; min-width: 260px; }
+  a.dl { color: var(--accent); font-weight: 600; text-decoration: none; }
+  details summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; justify-content: space-between; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::after { content: "+"; color: var(--muted); }
+  details[open] summary::after { content: "–"; }
+  details .body { margin-top: 16px; }
+  .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-family: var(--mono); font-size: 12.5px; padding: 4px 9px; border-radius: 6px;
+          background: var(--chip); border: 1px solid var(--line); cursor: pointer; }
+  .chip:hover { border-color: var(--accent); }
+  h3 { font-size: 13px; margin: 20px 0 8px; }
+  pre { font-family: var(--mono); font-size: 12.5px; background: var(--bg); border: 1px solid var(--line);
+        border-radius: 8px; padding: 12px; overflow-x: auto; margin: 0; white-space: pre-wrap; word-break: break-all; }
+  .codehead { display: flex; justify-content: space-between; align-items: center; margin: 14px 0 6px; }
+  .codehead span { font-size: 12px; color: var(--muted); font-weight: 600; }
+  .codehead button { padding: 3px 10px; font-size: 12px; }
+  .range { display: flex; align-items: center; gap: 8px; }
+  .range input { padding: 0; }
+  .range output { font-family: var(--mono); font-size: 12.5px; min-width: 32px; text-align: right; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text);
+           color: var(--bg); padding: 7px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Libra-TTS</h1>
+    <span class="sub" id="info">verbinde …</span>
+  </header>
+
+  <section class="panel">
+    <label for="text">Text</label>
+    <textarea id="text" placeholder="Text hier einfügen … Geräusche wie &lt;sigh&gt; oder &lt;laugh&gt; direkt in den Text schreiben."></textarea>
+    <div class="meta"><span id="count">0 Zeichen</span><span>Strg/⌘ + Enter = Sprechen</span></div>
+
+    <div class="row">
+      <div><label for="lang">Sprache</label><select id="lang"></select></div>
+      <div><label for="voice">Stimme</label><select id="voice"></select></div>
+      <div><label for="format">Format</label><select id="format"></select></div>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="go">Sprechen</button>
+      <span id="status"></span>
+    </div>
+    <div id="result">
+      <audio id="player" controls></audio>
+      <a class="dl" id="download" download>Herunterladen</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <details id="more">
+      <summary>Weitere Einstellungen</summary>
+      <div class="body">
+        <div class="row4">
+          <div><label for="style">Stil</label><select id="style"></select></div>
+          <div><label for="pace">Tempo</label>
+            <select id="pace"><option value="">normal</option><option value="slow">langsam</option><option value="fast">schnell</option></select>
+          </div>
+          <div><label for="seed">Seed</label><input id="seed" type="number" value="0" min="0" step="1"></div>
+          <div><label for="key">API-Schlüssel</label><input id="key" type="password" placeholder="falls gesetzt" autocomplete="off"></div>
+        </div>
+        <p class="hint">Tempo wirkt nur zusammen mit einem Stil. Gleicher Text + gleicher Seed = gleiches Audio.</p>
+
+        <div class="row" style="grid-template-columns: 1fr 1fr;">
+          <div><label for="temp">Variation (Temperatur)</label>
+            <div class="range"><input id="temp" type="range" min="0.1" max="1" step="0.05" value="0.5"><output id="tempv">0.50</output></div>
+          </div>
+          <div><label for="gap">Pause zwischen Sätzen (s)</label>
+            <div class="range"><input id="gap" type="range" min="0" max="1.5" step="0.05" value="0.3"><output id="gapv">0.30</output></div>
+          </div>
+        </div>
+
+        <h3>Geräusch- und Pausen-Tags <span class="sub">– Klick fügt an der Cursorposition ein</span></h3>
+        <div class="chips" id="tags"></div>
+
+        <h3>Stile <span class="sub">– Klick kopiert den Namen (für <code>"style"</code> oder <code>"instructions"</code>)</span></h3>
+        <div class="chips" id="styles"></div>
+
+        <h3>API</h3>
+        <p class="hint">OpenAI-kompatibel. Base-URL <code id="base"></code>, Modell <code>tts-1</code>. Erweiterungen
+          (<code>lang</code>, <code>style</code>, <code>pace</code>, <code>seed</code>, <code>temperature</code>, <code>gap</code>)
+          im OpenAI-Python-Client über <code>extra_body</code>.</p>
+        <div class="codehead"><span>JSON-Body (aktuelle Einstellungen)</span><button data-copy="json">Kopieren</button></div>
+        <pre id="json"></pre>
+        <div class="codehead"><span>curl</span><button data-copy="curl">Kopieren</button></div>
+        <pre id="curl"></pre>
+        <div class="codehead"><span>Python (openai)</span><button data-copy="py">Kopieren</button></div>
+        <pre id="py"></pre>
+      </div>
+    </details>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const LANG_DE = { auto: "Automatisch (nach Schrift)", de: "Deutsch", en: "Englisch", fr: "Französisch", es: "Spanisch",
+  it: "Italienisch", pt: "Portugiesisch", ru: "Russisch", zh: "Chinesisch", ja: "Japanisch", ko: "Koreanisch",
+  ar: "Arabisch", hi: "Hindi", pa: "Punjabi", bn: "Bengalisch", ur: "Urdu", id: "Indonesisch" };
+const LANG_ORDER = ["de", "en", "fr", "es", "it", "pt", "ru", "zh", "ja", "ko", "ar", "hi", "pa", "bn", "ur", "id"];
+const STORE = "libra-tts-ui";
+let cfg = null, lastUrl = null, busy = false;
+
+const store = {
+  load() { try { return JSON.parse(localStorage.getItem(STORE) || "{}"); } catch { return {}; } },
+  save(v) { try { localStorage.setItem(STORE, JSON.stringify(v)); } catch {} },
+};
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 1400);
+}
+
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta);
+    ta.select(); document.execCommand("copy"); ta.remove();
+  }
+  toast("Kopiert");
+}
+
+function opt(sel, value, label) { const o = document.createElement("option"); o.value = value; o.textContent = label; sel.appendChild(o); }
+
+function body() {
+  const b = { model: "tts-1", input: $("text").value, voice: $("voice").value, response_format: $("format").value };
+  if ($("lang").value !== "auto") b.lang = $("lang").value;
+  if ($("style").value) { b.style = $("style").value; if ($("pace").value) b.pace = $("pace").value; }
+  const seed = parseInt($("seed").value || "0", 10); if (seed) b.seed = seed;
+  const temp = parseFloat($("temp").value); if (Math.abs(temp - 0.5) > 1e-9) b.temperature = temp;
+  const gap = parseFloat($("gap").value); if (Math.abs(gap - 0.3) > 1e-9) b.gap = gap;
+  return b;
+}
+
+function updateCode() {
+  const b = body(); const sample = { ...b, input: b.input || "Dein Text" };
+  const base = location.origin + "/v1"; const key = $("key").value;
+  $("base").textContent = base;
+  $("json").textContent = JSON.stringify(sample, null, 2);
+  const auth = key ? ` \\\n  -H "Authorization: Bearer ${key}"` : "";
+  $("curl").textContent = `curl ${base}/audio/speech \\\n  -H "Content-Type: application/json"${auth} \\\n` +
+    `  -d '${JSON.stringify(sample).replace(/'/g, "'\\''")}' \\\n  -o ausgabe.${b.response_format}`;
+  const { model, input, voice, response_format, ...extra } = sample;
+  $("py").textContent = `from openai import OpenAI\n\nclient = OpenAI(base_url="${base}", api_key="${key || "egal"}")\n` +
+    `r = client.audio.speech.create(\n    model="tts-1",\n    voice=${JSON.stringify(voice)},\n` +
+    `    input=${JSON.stringify(input)},\n    response_format=${JSON.stringify(response_format)},\n` +
+    (Object.keys(extra).length ? `    extra_body=${JSON.stringify(extra)},\n` : "") +
+    `)\nopen("ausgabe.${response_format}", "wb").write(r.content)`;
+}
+
+function persist() {
+  store.save({ text: $("text").value, lang: $("lang").value, voice: $("voice").value, format: $("format").value,
+    style: $("style").value, pace: $("pace").value, seed: $("seed").value, temp: $("temp").value,
+    gap: $("gap").value, key: $("key").value });
+}
+
+function refresh() {
+  $("count").textContent = `${$("text").value.length.toLocaleString("de-DE")} Zeichen`;
+  $("pace").disabled = !$("style").value;
+  $("tempv").value = parseFloat($("temp").value).toFixed(2);
+  $("gapv").value = parseFloat($("gap").value).toFixed(2);
+  updateCode(); persist();
+}
+
+function insertAtCursor(tag) {
+  const ta = $("text"); const s = ta.selectionStart ?? ta.value.length, e = ta.selectionEnd ?? s;
+  const before = ta.value.slice(0, s), after = ta.value.slice(e);
+  const pad = before && !/\s$/.test(before) ? " " : "";
+  const ins = pad + tag + (after && !/^\s/.test(after) ? " " : "");
+  ta.value = before + ins + after; ta.focus();
+  ta.selectionStart = ta.selectionEnd = s + ins.length; refresh();
+}
+
+async function speak() {
+  if (busy) return;
+  const b = body();
+  if (!b.input.trim()) { setStatus("Bitte Text eingeben.", true); return; }
+  busy = true; $("go").disabled = true;
+  const t0 = performance.now();
+  const timer = setInterval(() => setStatus(`erzeuge … ${((performance.now() - t0) / 1000).toFixed(0)} s`), 250);
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if ($("key").value) headers.Authorization = `Bearer ${$("key").value}`;
+    const r = await fetch("/v1/audio/speech", { method: "POST", headers, body: JSON.stringify(b) });
+    if (!r.ok) {
+      let msg = `Fehler ${r.status}`;
+      try { const j = await r.json(); msg += `: ${j.error?.message || j.detail || JSON.stringify(j)}`; } catch {}
+      if (r.status === 401) { $("more").open = true; $("key").focus(); }
+      throw new Error(msg);
+    }
+    const blob = await r.blob();
+    if (lastUrl) URL.revokeObjectURL(lastUrl);
+    lastUrl = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    $("download").href = lastUrl; $("download").download = `libra_${b.voice}_${stamp}.${b.response_format}`;
+    $("download").textContent = `Herunterladen (${(blob.size / 1024).toFixed(0)} KB)`;
+    $("result").style.display = "flex";
+    const playable = b.response_format !== "pcm";
+    $("player").style.display = playable ? "" : "none";
+    if (playable) { $("player").src = lastUrl; $("player").play().catch(() => {}); }
+    clearInterval(timer);
+    setStatus(`fertig in ${((performance.now() - t0) / 1000).toFixed(1)} s` + (playable ? "" : " – PCM ist nicht abspielbar, nur Download"));
+  } catch (e) {
+    clearInterval(timer); setStatus(e.message, true);
+  } finally {
+    busy = false; $("go").disabled = false;
+  }
+}
+
+function setStatus(msg, err = false) { $("status").textContent = msg; $("status").className = err ? "err" : ""; }
+
+async function init() {
+  try {
+    const r = await fetch("/ui/config"); if (!r.ok) throw new Error(r.status);
+    cfg = await r.json();
+  } catch (e) { $("info").textContent = "Server nicht erreichbar"; setStatus("Konfiguration konnte nicht geladen werden.", true); return; }
+  const h = await fetch("/health").then((r) => r.json()).catch(() => ({}));
+  $("info").textContent = `Backend ${h.backend || "?"} · ${(h.sample_rate || 24000) / 1000} kHz`;
+
+  opt($("lang"), "auto", LANG_DE.auto);
+  const codes = Object.keys(cfg.languages);
+  [...LANG_ORDER.filter((c) => codes.includes(c)), ...codes.filter((c) => !LANG_ORDER.includes(c))]
+    .forEach((c) => opt($("lang"), c, LANG_DE[c] || cfg.languages[c]));
+  cfg.voices.forEach((v) => opt($("voice"), v.id, `${v.name} (${v.gender === "female" ? "w" : "m"})`));
+  cfg.formats.filter((f) => f !== "aac").forEach((f) => opt($("format"), f, f.toUpperCase()));
+  opt($("style"), "", "– kein Stil –"); cfg.styles.forEach((s) => opt($("style"), s, s));
+
+  cfg.tags.forEach((t) => { const c = document.createElement("span"); c.className = "chip"; c.textContent = t;
+    c.title = "einfügen"; c.onclick = () => insertAtCursor(t); $("tags").appendChild(c); });
+  cfg.styles.forEach((s) => { const c = document.createElement("span"); c.className = "chip"; c.textContent = s;
+    c.title = "kopieren"; c.onclick = () => copy(s); $("styles").appendChild(c); });
+
+  const saved = store.load();
+  $("lang").value = saved.lang || cfg.default_lang;
+  $("voice").value = saved.voice || cfg.default_voice;
+  $("format").value = saved.format || cfg.default_format;
+  ["text", "style", "pace", "seed", "temp", "gap", "key"].forEach((k) => { if (saved[k] != null) $(k).value = saved[k]; });
+  if (cfg.auth && !$("key").value) { $("more").open = true; setStatus("Server erwartet einen API-Schlüssel (Weitere Einstellungen)."); }
+
+  ["text", "lang", "voice", "format", "style", "pace", "seed", "temp", "gap", "key"].forEach((k) =>
+    $(k).addEventListener("input", refresh));
+  document.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => copy($(b.dataset.copy).textContent));
+  $("go").onclick = speak;
+  $("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); speak(); } });
+  refresh();
+}
+init();
+</script>
+</body>
+</html>

@@ -27,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import austausch, audio, chatgpt, tts, daily, vorlage, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, stilprofil, stimmen, szenarien, update, vergleich, worlds
+from . import austausch, audio, chatgpt, libra, regie, tts, daily, vorlage, episodes, genres, profiles, llm, textimport, news, timeline, migrations, providers, pruefstand, quality, runs, service, status, stilprofil, stimmen, szenarien, update, vergleich, worlds
 
 STATIC = Path(__file__).with_name("static")
 FAVICON = STATIC / "favicon"
@@ -123,6 +123,30 @@ def _gaps_job(slug: str, table: str | None, row_id: int | None) -> dict:
 
     ziel = service.ENTITIES[table]["label"] if table else "alle Bereiche"
     return _start_job(slug, "Lücken füllen", ziel + (f" #{row_id}" if row_id else ""), work)
+
+
+def _answer_job(slug: str, proposal_id: int, answers) -> dict:
+    with worlds.open_world(slug) as conn:
+        info = service.answer_proposal(conn, proposal_id, answers)
+
+    def work(job_id):
+        try:
+            with worlds.open_world(slug) as conn:
+                pid = llm.propose(conn, info["task"], impulse_id=info["impulse_id"], aufgabe="weltenbau",
+                                  art="Rückfragen beantwortet", ziel=f"Vorschlag #{proposal_id}", job_id=job_id)
+                service.link_answer(conn, proposal_id, pid)
+                state = conn.execute("SELECT status FROM proposals WHERE id = ?", (pid,)).fetchone()[0]
+                if state == "offen":
+                    if info["impulse_id"]:
+                        service.set_impulse_status(conn, info["impulse_id"], "vorschlag")
+                    return f"Neuer Vorschlag #{pid} wartet auf dich."
+                return "Eingearbeitet."
+        except Exception:
+            with worlds.open_world(slug) as conn:
+                service.revert_answer(conn, proposal_id)
+            raise
+
+    return _start_job(slug, "Rückfragen", f"Vorschlag #{proposal_id}", work)
 
 
 # ---------------------------------------------------------------- Routing
@@ -556,6 +580,11 @@ def post_accept(req, body, slug, pid):
         return service.apply_proposal(conn, int(pid))
 
 
+@route("POST", W + r"/proposals/(?P<pid>\d+)/beantworten")
+def post_answer(req, body, slug, pid):
+    return {"job": _answer_job(slug, int(pid), body.get("antworten"))}
+
+
 @route("POST", W + r"/proposals/(?P<pid>\d+)/verwerfen")
 def post_reject(req, body, slug, pid):
     with worlds.open_world(slug) as conn:
@@ -785,6 +814,12 @@ def get_reise(req, body, slug):
 def get_konsistenz(req, body, slug):
     with worlds.open_world(slug) as conn:
         return timeline.check(conn, req.reveal)
+
+
+@route("POST", W + r"/episodes/(?P<episode_id>\d+)/bewertung")
+def post_episode_rating(req, body, slug, episode_id):
+    with worlds.open_world(slug) as conn:
+        return episodes.rate_episode(conn, int(episode_id), body)
 
 
 @route("POST", W + r"/episodes/(?P<episode_id>\d+)/freigeben")
@@ -1134,7 +1169,7 @@ def post_restore(req, body):
     return {"slug": worlds.restore_backup(body.get("datei", ""))}
 
 
-# ---- Programm-Update (Codeberg-Releases)
+# ---- Programm-Update (GitHub-Releases)
 
 def _jobs_running() -> bool:
     with JOBS_LOCK:
@@ -1247,11 +1282,19 @@ def post_tts_restore(req, body, sid):
     return {"ok": True}
 
 
+def _regie_caps(p: dict) -> dict | None:
+    tts.ensure_regie(p["server"])
+    by_id = {s["id"]: s for s in tts.servers()}
+    return regie.vereinigen([regie.faehig(by_id.get(sid)) for sid in p["server"]])
+
+
 def _tts_state(conn, slug: str, episode_id: int) -> dict:
     p = tts.plan(conn, episode_id)
     out = tts.output_file(conn, slug, episode_id)
     return {"einstellung": p["einstellung"], "modus": p["modus"], "modi": tts.MODI, "sprecher": p["sprecher"],
             "fehlt": p["fehlt"], "besetzung": tts.cast(conn), "server_anzahl": len(tts.servers()),
+            "regie": dict(regie.zusammenfassung(conn, episode_id), moeglich=bool(_regie_caps(p)),
+                          stufe=p["einstellung"]["regie"], stufen=regie.STUFEN),
             "datei": out.name if out else None,
             "erstellt": time.strftime("%d.%m.%Y %H:%M", time.localtime(out.stat().st_mtime)) if out else None}
 
@@ -1266,7 +1309,7 @@ def get_episode_tts(req, body, slug, episode_id):
 def put_episode_tts(req, body, slug, episode_id):
     with worlds.open_world(slug) as conn:
         try:
-            tts.set_episode_settings(conn, int(episode_id), {k: body[k] for k in ("modus", "stimme") if k in body})
+            tts.set_episode_settings(conn, int(episode_id), {k: body[k] for k in ("modus", "stimme", "regie") if k in body})
             if isinstance(body.get("besetzung"), dict):
                 tts.set_cast(conn, body["besetzung"])
         except ValueError as exc:
@@ -1290,6 +1333,95 @@ def post_episode_tts_render(req, body, slug, episode_id):
         return f"Hörbuch (TTS-Server) fertig: {path.name}"
 
     return {"job": _start_job(slug, "Hörbuch (TTS)", f"Folge #{episode_id}", work)}
+
+
+@route("GET", W + r"/episodes/(?P<episode_id>\d+)/tts/regie")
+def get_episode_regie(req, body, slug, episode_id):
+    with worlds.open_world(slug) as conn:
+        return regie.ansicht(conn, int(episode_id), _regie_caps(tts.plan(conn, int(episode_id))))
+
+
+@route("PUT", W + r"/episodes/(?P<episode_id>\d+)/tts/regie")
+def put_episode_regie(req, body, slug, episode_id):
+    with worlds.open_world(slug) as conn:
+        caps = _regie_caps(tts.plan(conn, int(episode_id)))
+        try:
+            regie.setzen(conn, int(episode_id), body.get("segmente") or [], caps)
+        except ValueError as exc:
+            raise HTTPError(400, str(exc))
+        return regie.ansicht(conn, int(episode_id), caps)
+
+
+@route("POST", W + r"/episodes/(?P<episode_id>\d+)/tts/regie")
+def post_episode_regie(req, body, slug, episode_id):
+    with worlds.open_world(slug) as conn:
+        p = tts.plan(conn, int(episode_id))
+    caps = _regie_caps(p)
+    if not caps:
+        raise HTTPError(400, "Keiner der besetzten TTS-Server kann Sprechstile oder Geräusche (z. B. Libra-TTS).")
+    stufe = body.get("stufe") or p["einstellung"]["regie"]
+    if stufe == "aus":
+        stufe = regie.STANDARD_STUFE
+
+    def work(job_id):
+        with worlds.open_world(slug) as conn:
+            data = regie.erzeugen(conn, int(episode_id), stufe, caps, job_id=job_id)
+        styled = sum(1 for x in data["segmente"] if x["stil"])
+        return f"Regie fertig: {styled} Absätze mit Sprechstil."
+
+    return {"job": _start_job(slug, "Hörspiel-Regie", f"Folge #{episode_id}", work)}
+
+
+@route("POST", W + r"/episodes/(?P<episode_id>\d+)/tts/absatz/(?P<nr>\d+)")
+def post_episode_segment_take(req, body, slug, episode_id, nr):
+    """Einen Absatz einzeln sprechen (Anhören), neuen Take aufnehmen ({"neu": true}) oder Take wählen
+    ({"take": n, "waehlen": true}). Synchron – liefert den Dateinamen zum Abspielen."""
+    take = body.get("take")
+    with worlds.open_world(slug) as conn:
+        try:
+            return tts.segment_take(conn, slug, int(episode_id), int(nr), take=None if take in (None, "") else int(take),
+                                    neu=bool(body.get("neu")), waehlen=bool(body.get("waehlen")))
+        except (ValueError, LookupError) as exc:
+            raise HTTPError(400, str(exc))
+        except tts.TTSError as exc:
+            raise HTTPError(502, str(exc))
+
+
+# ---- Mitgelieferter Libra-TTS-Server
+
+@route("GET", "/api/libra")
+def get_libra(req, body):
+    return libra.status()
+
+
+@route("POST", "/api/libra/einrichten")
+def post_libra_setup(req, body):
+    if not libra.vorhanden():
+        raise HTTPError(404, "Libra-TTS fehlt im Programmordner (zusatz/libra-tts).")
+
+    def work(job_id):
+        if not libra.einrichten():
+            raise RuntimeError("Einrichtung fehlgeschlagen – Details im Story-World-Fenster.")
+        sid = libra.sicherstellen()
+        return "Libra-TTS eingerichtet und gestartet." if sid else "Libra-TTS eingerichtet (Start fehlgeschlagen – Log _update/libra.log)."
+
+    return {"job": _start_job(None, "Libra-TTS einrichten", "Libra-TTS (1–2 GB)", work)}
+
+
+@route("POST", "/api/libra/starten")
+def post_libra_start(req, body):
+    if not libra.eingerichtet():
+        raise HTTPError(400, "Libra-TTS ist noch nicht eingerichtet.")
+
+    def work(job_id):
+        if libra.archiviert():
+            raise RuntimeError("Libra-TTS ist archiviert – unter TTS-Server wiederherstellen.")
+        sid = libra.sicherstellen()
+        if not sid:
+            raise RuntimeError("Libra-TTS startet nicht – Log: _update/libra.log")
+        return "Libra-TTS läuft."
+
+    return {"job": _start_job(None, "Libra-TTS starten", "Libra-TTS", work)}
 
 
 @route("GET", W + "/runs")
@@ -1424,6 +1556,13 @@ class Handler(BaseHTTPRequestHandler):
                 if found is None:
                     raise HTTPError(404, "Für diese Folge gibt es noch keine Vertonung über TTS-Server.")
                 return self._send_file(found, download="download" in (urlparse(self.path).query or ""))
+            teil = re.match("^" + W + r"/episodes/(?P<eid>\d+)/tts/absatz/(?P<name>[0-9a-z-]+\.wav)$", path)
+            if method == "GET" and teil:
+                try:
+                    found = tts.segment_file(teil.group("slug"), int(teil.group("eid")), teil.group("name"))
+                except LookupError as exc:
+                    raise HTTPError(404, str(exc))
+                return self._send_file(found, ctype="audio/wav")
             probe = re.match(r"^/api/tts/server/(?P<sid>t_[0-9a-f]{8})/probe$", path)
             if method == "GET" and probe:
                 q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
@@ -1548,6 +1687,7 @@ def serve(port: int = 8765, open_browser: bool = True) -> None:
     print(f"Story World läuft auf {url}  (Welten: {worlds.worlds_dir()})  – Beenden mit Strg+C")
     daily.start_scheduler(_start_job)
     threading.Thread(target=update.auto_check, daemon=True).start()
+    threading.Thread(target=libra.sicherstellen, daemon=True).start()  # mitgelieferter TTS-Server, falls eingerichtet
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:
@@ -1556,3 +1696,4 @@ def serve(port: int = 8765, open_browser: bool = True) -> None:
         print("\nBeendet.")
     finally:
         server.server_close()
+        libra._beim_beenden()

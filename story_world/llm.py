@@ -48,7 +48,8 @@ VERBINDLICH:
 9. Jede Technik und jedes Phänomen (Antriebe, Wurmlöcher, Türen …) bekommt einen Eintrag in "technologies"
    mit Regeln & Grenzen, damit spätere Geschichten darauf zurückgreifen können.
 10. Rückfragen nur, wenn eine Entscheidung wirklich beim Nutzer liegt – sie halten den Vorschlag zur Freigabe an.
-    Formuliere Rückfragen spoilerarm.
+    Jede Rückfrage bekommt 2–3 klar verschiedene Antwortmöglichkeiten (A, B, C); der Nutzer kann stattdessen frei
+    antworten. Formuliere Rückfragen und Antwortmöglichkeiten spoilerarm.
 11. Maßstab laut ZEIT_UND_STRAENGE.md: Ein Ort liegt immer in einem größeren Ort (parent_id). Die Ebene folgt
     aus Art bzw. Maßstab. Fehlen Zwischenstufen (z. B. Spiralarm), lege sie bei Bedarf an.
 
@@ -60,7 +61,8 @@ ANTWORTE AUSSCHLIESSLICH MIT EINEM JSON-OBJEKT:
      "felder": {"<spalte>": "<wert>"}},
     {"aktion": "ergaenzen", "tabelle": "<tabelle>", "id": <bestehende id>, "felder": {"<leere spalte>": "<wert>"}}
   ],
-  "rueckfragen": ["nur bei echtem Widerspruch zu fixierten Regeln, sonst leere Liste"]
+  "rueckfragen": [{"frage": "nur bei echtem Widerspruch zu fixierten Regeln, sonst leere Liste",
+                   "optionen": ["Möglichkeit A", "Möglichkeit B", "Möglichkeit C"]}]
 }
 Verweise (ref:-Spalten) auf bestehende Datensätze per numerischer id, auf in DIESEM Vorschlag angelegte per "@kurzname".
 Ein Datensatz muss angelegt sein, bevor ein anderer per "@kurzname" auf ihn verweist.
